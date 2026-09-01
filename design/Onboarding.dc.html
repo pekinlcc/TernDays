@@ -1,0 +1,72 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    body { margin: 0; font-family: -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+    a { color: #1F6289; } a:hover { color: #2E7FA8; }
+  </style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; display: flex; flex-direction: column; padding: 60px 24px 24px 24px; background: #F4F6F8; color: #1F2B38; overflow: hidden;">
+
+  <div style="align-self: center; width: 148px; height: 148px; border-radius: 50%; background: #DEEDF5; display: flex; align-items: center; justify-content: center;">
+    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#2E7FA8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-6-5.1-6-10a6 6 0 1 1 12 0c0 4.9-6 10-6 10z"/><circle cx="12" cy="11" r="2.3"/></svg>
+  </div>
+  <div style="align-self: center; display: flex; gap: 10px; margin-top: -16px;">
+    <div style="display: flex; align-items: center; gap: 6px; padding: 7px 13px; border-radius: 999px; background: #FFFFFF; box-shadow: 0 2px 6px rgba(31, 43, 56, 0.08); font-size: 13px; font-weight: 600;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#A9762F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.5"/><path d="M12 3v2"/><path d="M12 19v2"/><path d="M3 12h2"/><path d="M19 12h2"/><path d="m5.6 5.6 1.4 1.4"/><path d="m17 17 1.4 1.4"/><path d="m5.6 18.4 1.4-1.4"/><path d="m17 7 1.4-1.4"/></svg>
+      07:00
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px; padding: 7px 13px; border-radius: 999px; background: #FFFFFF; box-shadow: 0 2px 6px rgba(31, 43, 56, 0.08); font-size: 13px; font-weight: 600;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6B7A89" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 17a5 5 0 0 0-10 0"/><path d="M12 10V6"/><path d="m4.6 11.6 1.4 1.4"/><path d="m18 13 1.4-1.4"/><path d="M3 17h2"/><path d="M19 17h2"/><path d="M6 21h12"/></svg>
+      17:00
+    </div>
+  </div>
+
+  <div style="text-align: center; font-size: 23px; font-weight: 700; line-height: 1.4; margin-top: 26px;">每天两次，自动记住<br>你在哪座城市</div>
+  <div style="text-align: center; font-size: 14px; color: #6B7A89; line-height: 1.7; margin-top: 12px; padding: 0 8px;">每天早上 7:00 和下午 5:00，TernDays 在后台各记录一次 GPS 定位，只保留“城市”级别的结果，用来统计你一年里在每座城市待了多少天。</div>
+
+  <div style="background: #FFFFFF; border-radius: 16px; padding: 6px 16px; display: flex; flex-direction: column; margin-top: 22px; box-shadow: 0 1px 2px rgba(31, 43, 56, 0.04);">
+    <div style="display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #EEF2F5;">
+      <div style="width: 36px; height: 36px; border-radius: 11px; background: #DEEDF5; color: #1F6289; display: flex; align-items: center; justify-content: center;">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-6-5.1-6-10a6 6 0 1 1 12 0c0 4.9-6 10-6 10z"/><circle cx="12" cy="11" r="2.3"/></svg>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 2px;">
+        <div style="font-size: 14px; font-weight: 600;">需要「始终允许」定位权限</div>
+        <div style="font-size: 12px; color: #6B7A89;">仅在每天两个时间点各取一次位置，不持续追踪</div>
+      </div>
+    </div>
+    <div style="display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #EEF2F5;">
+      <div style="width: 36px; height: 36px; border-radius: 11px; background: #DEEDF5; color: #1F6289; display: flex; align-items: center; justify-content: center;">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5.5c0 4.4-3 7.6-7 9.5-4-1.9-7-5.1-7-9.5V6z"/><path d="m9 12 2 2 4-4.5"/></svg>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 2px;">
+        <div style="font-size: 14px; font-weight: 600;">数据只保存在手机本地</div>
+        <div style="font-size: 12px; color: #6B7A89;">无账号、不上传，删除应用即清除全部数据</div>
+      </div>
+    </div>
+    <div style="display: flex; align-items: center; gap: 12px; padding: 12px 0;">
+      <div style="width: 36px; height: 36px; border-radius: 11px; background: #DEEDF5; color: #1F6289; display: flex; align-items: center; justify-content: center;">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19c0-8.5 5.5-13.5 16-15-1 11-6.5 15-13.5 15z"/><path d="M4 19c2.5-4.5 5.5-7.5 9.5-9.5"/></svg>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 2px;">
+        <div style="font-size: 14px; font-weight: 600;">几乎不耗电</div>
+        <div style="font-size: 12px; color: #6B7A89;">每天仅定位两次，没有后台常驻服务</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top: auto; display: flex; flex-direction: column; gap: 6px;">
+    <div style="height: 52px; border-radius: 14px; background: #2E7FA8; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 600;">允许定位，开始统计</div>
+    <div style="height: 44px; display: flex; align-items: center; justify-content: center; font-size: 14px; color: #6B7A89;">稍后再说</div>
+    <div style="text-align: center; font-size: 11px; color: #9AA7B4; line-height: 1.6;">后台任务由手机系统调度，实际记录时间可能<br>在 07:00 / 17:00 附近略有浮动</div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
