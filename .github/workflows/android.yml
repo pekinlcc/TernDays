@@ -1,0 +1,85 @@
+name: Android
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: "发布版本号（如 v0.1）。填写后会在当前提交上创建该 tag 并发布 Release"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests (core)
+        working-directory: android
+        run: ./gradlew --no-daemon :core:test
+
+      - name: Assemble release APK
+        working-directory: android
+        run: ./gradlew --no-daemon :app:assembleRelease
+
+      - name: Resolve version
+        id: ver
+        run: |
+          # 发布判定优先级：手动输入 > v* tag 推送 > RELEASE_VERSION 文件里还没打过 tag 的版本
+          RELEASE="${{ github.event.inputs.release_version }}"
+          if [ -z "$RELEASE" ]; then
+            case "$GITHUB_REF_NAME" in v*) RELEASE="$GITHUB_REF_NAME" ;; esac
+          fi
+          if [ -z "$RELEASE" ] && [ -f RELEASE_VERSION ]; then
+            FV="v$(tr -d ' \r\n' < RELEASE_VERSION)"
+            if [ "$FV" != "v" ] && ! git ls-remote --exit-code --tags origin "refs/tags/$FV" >/dev/null 2>&1; then
+              RELEASE="$FV"
+            fi
+          fi
+          VERSION="${RELEASE:-dev-${GITHUB_SHA::7}}"
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          cp android/app/build/outputs/apk/release/app-release.apk "TernDays-${VERSION}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terndays-apk
+          path: TernDays-${{ steps.ver.outputs.version }}.apk
+
+      - name: Sync release notes to published releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 已发布 Release 的正文以 docs/release-notes/ 为准：文件改了，这里自动同步
+          for f in docs/release-notes/v*.md; do
+            tag=$(basename "$f" .md)
+            if gh release view "$tag" --json body -q .body > /tmp/cur_body 2>/dev/null; then
+              if ! diff -q /tmp/cur_body "$f" >/dev/null 2>&1; then
+                gh release edit "$tag" --notes-file "$f"
+                echo "synced $tag"
+              fi
+            fi
+          done
+
+      - name: Publish GitHub Release
+        if: steps.ver.outputs.release != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.release }}
+          target_commitish: ${{ github.sha }}
+          name: TernDays ${{ steps.ver.outputs.release }}
+          body_path: docs/release-notes/${{ steps.ver.outputs.release }}.md
+          files: TernDays-${{ steps.ver.outputs.release }}.apk
