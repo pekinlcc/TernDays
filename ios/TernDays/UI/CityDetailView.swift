@@ -1,0 +1,210 @@
+import SwiftUI
+
+struct CityDetailView: View {
+    let cityKey: String
+    let year: Int
+
+    @State private var data: YearData?
+    @State private var month = 0
+
+    private struct CityDay {
+        let weight: Double
+        let manual: Bool
+    }
+
+    private var cityDays: [LocalDate: CityDay] {
+        guard let d = data else { return [:] }
+        var out: [LocalDate: CityDay] = [:]
+        for (date, attr) in d.stats.days {
+            if let share = attr.shares.first(where: { $0.cityKey == cityKey }) {
+                out[date] = CityDay(weight: share.weight, manual: attr.manual)
+            }
+        }
+        return out
+    }
+
+    private var stat: CityStat? { data?.stats.cities.first { $0.cityKey == cityKey } }
+
+    var body: some View {
+        let days = cityDays
+        ScrollView {
+            VStack(spacing: 12) {
+                HStack(alignment: .lastTextBaseline) {
+                    Text(stat.map { DayCounting.formatDays($0.days) } ?? "0")
+                        .font(.system(size: 32, weight: .bold)).foregroundColor(Td.accentDeep)
+                    Text("天").font(.system(size: 13)).foregroundColor(Td.muted)
+                    Spacer()
+                    Text("\(String(year)) 年累计 · 全天 \(stat?.fullDays ?? 0) 天 + 半天 \(stat?.halfDays ?? 0) 次")
+                        .font(.system(size: 12)).foregroundColor(Td.muted)
+                }
+                .padding(.horizontal, 2)
+
+                if month != 0 { calendarCard(days: days) }
+
+                HStack {
+                    Text("打卡明细").font(.system(size: 13, weight: .medium)).foregroundColor(Td.muted)
+                    Spacer()
+                    Text("最近在前").font(.system(size: 11)).foregroundColor(Td.faint)
+                }
+                .padding(.horizontal, 2)
+
+                detailList(days: days)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+        }
+        .background(Td.bg)
+        .navigationTitle(stat?.cityName ?? "")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            let d = YearData.load(year: year)
+            data = d
+            if month == 0 {
+                let latest = d.stats.days.keys
+                    .filter { date in d.stats.days[date]?.shares.contains { $0.cityKey == cityKey } ?? false }
+                    .max()
+                month = latest?.month ?? (year == LocalDate.today().year ? LocalDate.today().month : 12)
+            }
+        }
+    }
+
+    private func calendarCard(days: [LocalDate: CityDay]) -> some View {
+        let monthSum = days.filter { $0.key.month == month }.values.reduce(0.0) { $0 + $1.weight }
+        let leading = LocalDate(year: year, month: month, day: 1).weekday - 1
+        let count = LocalDate.daysIn(year: year, month: month)
+
+        return TdCard {
+            VStack(spacing: 8) {
+                HStack {
+                    monthButton(system: "chevron.left") { if month > 1 { month -= 1 } }
+                    Text("\(String(year)) 年 \(month) 月")
+                        .font(.system(size: 15, weight: .semibold)).foregroundColor(Td.ink)
+                        .frame(maxWidth: .infinity)
+                    monthButton(system: "chevron.right") { if month < 12 { month += 1 } }
+                }
+                HStack {
+                    ForEach(["一", "二", "三", "四", "五", "六", "日"], id: \.self) { w in
+                        Text(w).font(.system(size: 11)).foregroundColor(Td.faint).frame(maxWidth: .infinity)
+                    }
+                }
+                let cells: [LocalDate?] = Array(repeating: nil, count: leading) +
+                    (1...count).map { LocalDate(year: year, month: month, day: $0) }
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 7), spacing: 4) {
+                    ForEach(0..<cells.count, id: \.self) { i in
+                        dayCell(date: cells[i], day: cells[i].flatMap { days[$0] })
+                    }
+                }
+                HStack(spacing: 6) {
+                    RoundedRectangle(cornerRadius: 4).fill(Td.accentSoft).frame(width: 14, height: 14)
+                    Text("全天").font(.system(size: 11)).foregroundColor(Td.muted)
+                    halfSwatch.frame(width: 14, height: 14).padding(.leading, 8)
+                    Text("半天").font(.system(size: 11)).foregroundColor(Td.muted)
+                    Spacer()
+                    Text("本月 \(DayCounting.formatDays(monthSum)) 天")
+                        .font(.system(size: 12, weight: .semibold)).foregroundColor(Td.accentDeep)
+                }
+                .padding(.top, 2)
+            }
+            .padding(14)
+        }
+    }
+
+    private func monthButton(system: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: system)
+                .font(.system(size: 13, weight: .semibold)).foregroundColor(Td.ink)
+                .frame(width: 32, height: 32)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Td.bg))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var halfSwatch: some View {
+        GeometryReader { geo in
+            Path { p in
+                p.move(to: .zero)
+                p.addLine(to: CGPoint(x: geo.size.width, y: 0))
+                p.addLine(to: CGPoint(x: 0, y: geo.size.height))
+                p.closeSubpath()
+            }
+            .fill(Td.accentSoft)
+        }
+        .background(RoundedRectangle(cornerRadius: 4).stroke(Td.accentSoft, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+
+    @ViewBuilder
+    private func dayCell(date: LocalDate?, day: CityDay?) -> some View {
+        ZStack {
+            if let day {
+                if day.weight >= 1.0 {
+                    RoundedRectangle(cornerRadius: 10).fill(Td.accentSoft)
+                } else {
+                    GeometryReader { geo in
+                        Path { p in
+                            p.move(to: .zero)
+                            p.addLine(to: CGPoint(x: geo.size.width, y: 0))
+                            p.addLine(to: CGPoint(x: 0, y: geo.size.height))
+                            p.closeSubpath()
+                        }
+                        .fill(Td.accentSoft)
+                    }
+                    .background(RoundedRectangle(cornerRadius: 10).stroke(Td.accentSoft, lineWidth: 1))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+            }
+            if let date {
+                Text("\(date.day)")
+                    .font(.system(size: 13, weight: day != nil ? .semibold : .regular))
+                    .foregroundColor(day == nil ? Td.faint : (day!.weight >= 1.0 ? Td.accentDeep : Td.ink))
+            }
+        }
+        .frame(height: 42)
+    }
+
+    private func detailList(days: [LocalDate: CityDay]) -> some View {
+        let dates = days.keys.sorted(by: >)
+        let punchesByDate = Dictionary(grouping: data?.punches ?? [], by: { $0.localDate })
+        return TdCard {
+            VStack(spacing: 0) {
+                if dates.isEmpty {
+                    Text("暂无记录").font(.system(size: 13)).foregroundColor(Td.faint)
+                        .frame(maxWidth: .infinity).padding(.vertical, 20)
+                }
+                ForEach(Array(dates.enumerated()), id: \.element) { i, date in
+                    if i > 0 { Divider().overlay(Td.divider) }
+                    let day = days[date]!
+                    let punches = punchesByDate[date] ?? []
+                    let m = punches.first { $0.slot == .morning }
+                    let e = punches.first { $0.slot == .evening }
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("\(date.month)月\(date.day)日 · \(date.weekdayCn)")
+                                .font(.system(size: 14, weight: .semibold)).foregroundColor(Td.ink)
+                            Text(subText(day: day, m: m, e: e))
+                                .font(.system(size: 12)).foregroundColor(Td.muted)
+                        }
+                        Spacer()
+                        if day.manual {
+                            TagView(text: "补记", bg: Td.warmSoft, fg: Td.warmDeep)
+                        } else if day.weight >= 1.0 {
+                            TagView(text: "全天", bg: Td.accentSoft, fg: Td.accentDeep)
+                        } else {
+                            TagView(text: "半天", bg: Td.warmSoft, fg: Td.warmDeep)
+                        }
+                    }
+                    .padding(.vertical, 11)
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private func subText(day: CityDay, m: Punch?, e: Punch?) -> String {
+        if day.manual { return "手动补记" }
+        var parts: [String] = []
+        if let m { parts.append("早 \(m.clock) \(m.cityName)") }
+        if let e { parts.append("晚 \(e.clock) \(e.cityName)") }
+        return parts.isEmpty ? "无打卡记录" : parts.joined(separator: " · ")
+    }
+}
