@@ -40,5 +40,9 @@
     <array>
         <string>app.terndays.refresh</string>
     </array>
+    <key>NSCameraUsageDescription</key>
+    <string>换手机迁移时用相机扫描旧手机上的二维码，仅此用途。</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>换手机迁移时通过局域网把数据直接传到新手机，不经过任何服务器。</string>
 </dict>
 </plist>

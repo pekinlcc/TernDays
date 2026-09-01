@@ -134,6 +134,46 @@ final class DataStore {
         }
     }
 
+    func allPunches() -> [Punch] {
+        queue.sync { punches.sorted { $0.epochMs < $1.epochMs } }
+    }
+
+    func allOverrides() -> [DayOverride] {
+        queue.sync { overrides }
+    }
+
+    struct MergeResult {
+        let punchesAdded: Int
+        let punchesSkipped: Int
+        let overridesAdded: Int
+        let overridesSkipped: Int
+    }
+
+    /// 迁移导入合并:打卡按 (日期, 时段)、手动记录按日期去重,本机已有的一律保留。
+    func mergeImported(punches newPunches: [Punch], overrides newOverrides: [DayOverride]) -> MergeResult {
+        queue.sync {
+            var pAdded = 0, pSkipped = 0, oAdded = 0, oSkipped = 0
+            for p in newPunches {
+                if punches.contains(where: { $0.localDate == p.localDate && $0.slot == p.slot }) {
+                    pSkipped += 1
+                } else {
+                    punches.append(p)
+                    pAdded += 1
+                }
+            }
+            for o in newOverrides {
+                if overrides.contains(where: { $0.localDate == o.localDate }) {
+                    oSkipped += 1
+                } else {
+                    overrides.append(o)
+                    oAdded += 1
+                }
+            }
+            if pAdded + oAdded > 0 { persist() }
+            return MergeResult(punchesAdded: pAdded, punchesSkipped: pSkipped, overridesAdded: oAdded, overridesSkipped: oSkipped)
+        }
+    }
+
     func yearsWithData(currentYear: Int) -> [Int] {
         queue.sync {
             var years = Set([currentYear])

@@ -95,7 +95,13 @@ private fun AppRoot() {
             )
         }
         composable("settings") {
-            SettingsScreen(onBack = { nav.popBackStack() })
+            SettingsScreen(
+                onBack = { nav.popBackStack() },
+                onMigrate = { nav.navigate("migrate") },
+            )
+        }
+        composable("migrate") {
+            MigrateSendScreen(onBack = { nav.popBackStack() })
         }
     }
 }

@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
@@ -50,15 +51,19 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import app.terndays.android.R
 import app.terndays.android.db.PunchDb
 import app.terndays.android.geo.Cities
+import app.terndays.android.migrate.MigrateClient
 import app.terndays.android.util.Perms
 import app.terndays.android.util.VendorKeepAlive
 import app.terndays.core.DayOverride
+import app.terndays.core.MigrationLink
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
     val context = LocalContext.current
     var tick by remember { mutableIntStateOf(0) }
     LifecycleResumeEffect(Unit) {
@@ -79,6 +84,25 @@ fun SettingsScreen(onBack: () -> Unit) {
     ) { tick++ }
 
     var backfillOpen by remember { mutableStateOf(false) }
+    var importState by remember { mutableStateOf<ImportState?>(null) }
+    val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        val text = result.contents ?: return@rememberLauncherForActivityResult
+        val link = MigrationLink.parse(text)
+        if (link == null) {
+            importState = ImportState.Failed("这不是 TernDays 的迁移二维码")
+        } else {
+            importState = ImportState.Working("正在连接旧手机…")
+            MigrateClient.run(
+                context, link,
+                onStatus = { msg -> importState = ImportState.Working(msg) },
+                onDone = { outcome ->
+                    importState = ImportState.Done(outcome)
+                    tick++
+                },
+                onError = { msg -> importState = ImportState.Failed(msg) },
+            )
+        }
+    }
 
     Column(Modifier.fillMaxSize().background(Td.Bg).statusBarsPadding().padding(horizontal = 20.dp)) {
         Spacer(Modifier.height(10.dp))
@@ -212,6 +236,36 @@ fun SettingsScreen(onBack: () -> Unit) {
 
             item {
                 Text(
+                    "换手机", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Td.Muted,
+                    modifier = Modifier.padding(start = 2.dp, top = 4.dp),
+                )
+            }
+            item {
+                TdCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(horizontal = 16.dp)) {
+                        MigrateRow(
+                            "迁移到新手机", "本机是旧手机:展示二维码,让新手机扫码接收全部数据",
+                            onClick = onMigrate,
+                        )
+                        HorizontalDivider(color = Td.Divider, thickness = 1.dp)
+                        MigrateRow(
+                            "从旧手机导入", "本机是新手机:扫旧手机上的二维码,数据经加密局域网直传",
+                            onClick = {
+                                scanLauncher.launch(
+                                    ScanOptions()
+                                        .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                                        .setPrompt("扫描旧手机 TernDays 迁移页上的二维码")
+                                        .setBeepEnabled(false)
+                                        .setOrientationLocked(false),
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+
+            item {
+                Text(
                     "关于", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Td.Muted,
                     modifier = Modifier.padding(start = 2.dp, top = 4.dp),
                 )
@@ -249,6 +303,58 @@ fun SettingsScreen(onBack: () -> Unit) {
         }
     }
 
+    when (val s = importState) {
+        null -> Unit
+        is ImportState.Working -> Dialog(onDismissRequest = { }) {
+            TdCard(Modifier.fillMaxWidth()) {
+                Column(
+                    Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    CircularProgressIndicator(color = Td.Accent)
+                    Text(s.message, fontSize = 13.sp, color = Td.Muted, textAlign = TextAlign.Center)
+                }
+            }
+        }
+        is ImportState.Done -> Dialog(onDismissRequest = { importState = null }) {
+            TdCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("导入完成 ✓", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Td.Ink)
+                    val r = s.outcome.result
+                    Text(
+                        buildString {
+                            append("新增 ${r.punchesAdded} 条打卡、${r.overridesAdded} 条手动记录")
+                            if (r.punchesSkipped + r.overridesSkipped > 0) {
+                                append(";本机已有的 ${r.punchesSkipped + r.overridesSkipped} 条保持不变")
+                            }
+                            if (s.outcome.remapped > 0) append("\n已按本机城市库修正 ${s.outcome.remapped} 条城市判定")
+                        },
+                        fontSize = 13.sp, color = Td.Muted, lineHeight = 20.sp,
+                    )
+                    Text(
+                        "好", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.AccentDeep,
+                        modifier = Modifier.align(Alignment.End)
+                            .clickable { importState = null }.padding(8.dp),
+                    )
+                }
+            }
+        }
+        is ImportState.Failed -> Dialog(onDismissRequest = { importState = null }) {
+            TdCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("导入没有成功", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Td.Ink)
+                    Text(s.message, fontSize = 13.sp, color = Td.Muted, lineHeight = 20.sp)
+                    Text(
+                        "知道了", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.AccentDeep,
+                        modifier = Modifier.align(Alignment.End)
+                            .clickable { importState = null }.padding(8.dp),
+                    )
+                }
+            }
+        }
+    }
+
     if (backfillOpen) {
         BackfillDialog(
             unrecorded = data?.stats?.unrecordedDates ?: emptyList(),
@@ -261,6 +367,27 @@ fun SettingsScreen(onBack: () -> Unit) {
                 tick++
             },
         )
+    }
+}
+
+private sealed interface ImportState {
+    data class Working(val message: String) : ImportState
+    data class Done(val outcome: MigrateClient.Outcome) : ImportState
+    data class Failed(val message: String) : ImportState
+}
+
+@Composable
+private fun MigrateRow(title: String, sub: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.Ink)
+            Text(sub, fontSize = 12.sp, color = Td.Muted, lineHeight = 17.sp)
+        }
+        Spacer(Modifier.width(10.dp))
+        Icon(painterResource(R.drawable.ic_chev_right), null, Modifier.size(16.dp), tint = Color(0xFFC3CCD4))
     }
 }
 

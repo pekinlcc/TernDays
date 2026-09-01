@@ -9,6 +9,10 @@ struct SettingsView: View {
     @State private var notifGranted: Bool?
     @State private var data: YearData?
     @State private var backfillOpen = false
+    @State private var scanOpen = false
+    @State private var importWorking: String?
+    @State private var importResult: String?
+    @State private var importResultTitle = ""
 
     private var year: Int { LocalDate.today().year }
 
@@ -87,6 +91,25 @@ struct SettingsView: View {
                     .padding(.horizontal, 16)
                 }
 
+                Text("换手机").font(.system(size: 13, weight: .medium)).foregroundColor(Td.muted)
+                    .padding(.leading, 2).padding(.top, 4)
+                TdCard {
+                    VStack(spacing: 0) {
+                        NavigationLink {
+                            MigrateSendView()
+                        } label: {
+                            migrateRow("迁移到新手机", "本机是旧手机:展示二维码,让新手机扫码接收全部数据")
+                        }
+                        .buttonStyle(.plain)
+                        Divider().overlay(Td.divider)
+                        Button { scanOpen = true } label: {
+                            migrateRow("从旧手机导入", "本机是新手机:扫旧手机上的二维码,数据经加密局域网直传")
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 16)
+                }
+
                 Text("关于").font(.system(size: 13, weight: .medium)).foregroundColor(Td.muted)
                     .padding(.leading, 2).padding(.top, 4)
                 TdCard {
@@ -113,6 +136,61 @@ struct SettingsView: View {
         .navigationTitle("设置")
         .navigationBarTitleDisplayMode(.inline)
         .task { reload() }
+        .sheet(isPresented: $scanOpen) {
+            MigrateScanView { code in
+                scanOpen = false
+                guard let link = MigrationLink.parse(code) else {
+                    importResultTitle = "导入没有成功"
+                    importResult = "这不是 TernDays 的迁移二维码"
+                    return
+                }
+                importWorking = "正在连接旧手机…"
+                MigrateImportClient.run(
+                    link: link,
+                    onStatus: { msg in importWorking = msg },
+                    onDone: { outcome in
+                        importWorking = nil
+                        importResultTitle = "导入完成 ✓"
+                        let r = outcome.result
+                        var text = "新增 \(r.punchesAdded) 条打卡、\(r.overridesAdded) 条手动记录"
+                        if r.punchesSkipped + r.overridesSkipped > 0 {
+                            text += ";本机已有的 \(r.punchesSkipped + r.overridesSkipped) 条保持不变"
+                        }
+                        if outcome.remapped > 0 {
+                            text += "\n已按本机城市库修正 \(outcome.remapped) 条城市判定"
+                        }
+                        importResult = text
+                        reload()
+                    },
+                    onError: { msg in
+                        importWorking = nil
+                        importResultTitle = "导入没有成功"
+                        importResult = msg
+                    }
+                )
+            }
+        }
+        .overlay {
+            if let msg = importWorking {
+                ZStack {
+                    Color.black.opacity(0.35).ignoresSafeArea()
+                    VStack(spacing: 14) {
+                        ProgressView()
+                        Text(msg).font(.system(size: 13)).foregroundColor(Td.muted)
+                    }
+                    .padding(28)
+                    .background(RoundedRectangle(cornerRadius: 16).fill(Td.surface))
+                }
+            }
+        }
+        .alert(importResultTitle, isPresented: .init(
+            get: { importResult != nil },
+            set: { if !$0 { importResult = nil } }
+        )) {
+            Button("好") { importResult = nil }
+        } message: {
+            Text(importResult ?? "")
+        }
         .sheet(isPresented: $backfillOpen) {
             BackfillSheet(
                 unrecorded: data?.stats.unrecordedDates.sorted(by: >) ?? [],
@@ -157,6 +235,21 @@ struct SettingsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private func migrateRow(_ title: String, _ sub: String) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 14, weight: .semibold)).foregroundColor(Td.ink)
+                Text(sub).font(.system(size: 12)).foregroundColor(Td.muted)
+                    .multilineTextAlignment(.leading)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13)).foregroundColor(Color(hex: 0xC3CCD4))
+        }
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
     }
 
     private func aboutLine(_ label: String, _ value: String) -> some View {

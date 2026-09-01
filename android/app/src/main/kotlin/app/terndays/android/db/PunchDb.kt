@@ -163,6 +163,78 @@ class PunchDb private constructor(context: Context) :
             out
         }
 
+    fun allPunches(): List<Punch> =
+        readableDatabase.rawQuery(
+            "SELECT local_date, slot, epoch_ms, zone_id, lat, lng, accuracy, city_key, city_name, delayed, from_cache " +
+                "FROM punch ORDER BY local_date, slot",
+            null,
+        ).use { c ->
+            val out = ArrayList<Punch>(c.count)
+            while (c.moveToNext()) {
+                out.add(
+                    Punch(
+                        localDate = LocalDate.parse(c.getString(0)),
+                        slot = Slot.valueOf(c.getString(1)),
+                        epochMs = c.getLong(2),
+                        zoneId = c.getString(3),
+                        lat = c.getDouble(4),
+                        lng = c.getDouble(5),
+                        accuracyM = if (c.isNull(6)) null else c.getDouble(6),
+                        cityKey = c.getString(7),
+                        cityName = c.getString(8),
+                        delayed = c.getInt(9) == 1,
+                        fromCache = c.getInt(10) == 1,
+                    ),
+                )
+            }
+            out
+        }
+
+    fun allOverrides(): List<DayOverride> =
+        readableDatabase.rawQuery("SELECT local_date, city_key, city_name FROM day_override", null).use { c ->
+            val out = ArrayList<DayOverride>(c.count)
+            while (c.moveToNext()) {
+                out.add(DayOverride(LocalDate.parse(c.getString(0)), c.getString(1), c.getString(2)))
+            }
+            out
+        }
+
+    data class MergeResult(val punchesAdded: Int, val punchesSkipped: Int, val overridesAdded: Int, val overridesSkipped: Int)
+
+    /**
+     * 迁移导入合并:打卡按 (日期, 时段) 去重、手动记录按日期去重,本机已有的一律保留。
+     * 单事务执行,失败整体回滚。
+     */
+    fun mergeImported(punches: List<Punch>, overrides: List<DayOverride>): MergeResult {
+        val db = writableDatabase
+        var pAdd = 0
+        var pSkip = 0
+        var oAdd = 0
+        var oSkip = 0
+        db.beginTransaction()
+        try {
+            for (p in punches) {
+                if (insertPunch(p)) pAdd++ else pSkip++
+            }
+            for (o in overrides) {
+                val exists = db.rawQuery(
+                    "SELECT 1 FROM day_override WHERE local_date=? LIMIT 1",
+                    arrayOf(o.localDate.toString()),
+                ).use { it.moveToFirst() }
+                if (exists) {
+                    oSkip++
+                } else {
+                    setOverride(o)
+                    oAdd++
+                }
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return MergeResult(pAdd, pSkip, oAdd, oSkip)
+    }
+
     fun setOverride(o: DayOverride) {
         val values = ContentValues().apply {
             put("local_date", o.localDate.toString())

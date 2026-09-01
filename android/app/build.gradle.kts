@@ -14,8 +14,8 @@ android {
         applicationId = "app.terndays"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.5"
+        versionCode = 7
+        versionName = "0.6"
     }
 
     signingConfigs {
@@ -62,4 +62,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.navigation:navigation-compose:2.8.5")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    // 换手机迁移:二维码生成(zxing core,纯 Java)与扫码(嵌入式扫码器,不依赖 GMS)
+    implementation("com.google.zxing:core:3.5.3")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 }
