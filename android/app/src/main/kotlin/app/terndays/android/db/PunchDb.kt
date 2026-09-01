@@ -60,6 +60,9 @@ class PunchDb private constructor(context: Context) :
         return writableDatabase.insertWithOnConflict("punch", null, values, SQLiteDatabase.CONFLICT_IGNORE) != -1L
     }
 
+    fun hasAnyPunch(): Boolean =
+        readableDatabase.rawQuery("SELECT 1 FROM punch LIMIT 1", null).use { it.moveToFirst() }
+
     fun hasPunch(date: LocalDate, slot: Slot): Boolean =
         readableDatabase.rawQuery(
             "SELECT 1 FROM punch WHERE local_date=? AND slot=? LIMIT 1",

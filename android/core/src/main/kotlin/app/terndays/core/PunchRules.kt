@@ -18,10 +18,14 @@ object PunchRules {
 
     val DELAY_TOLERANCE: Duration = Duration.ofMinutes(15)
 
-    fun targetTime(slot: Slot): LocalTime = when (slot) {
+    fun targetTime(slot: Slot): LocalTime? = when (slot) {
         Slot.MORNING -> MORNING_TARGET
         Slot.EVENING -> EVENING_TARGET
+        Slot.EXTRA -> null
     }
+
+    /** EXTRA 点按捕获时刻归属的半天：true = 上半天（可兜底早点），false = 下半天（可兜底晚点）。 */
+    fun isMorningHalf(time: LocalTime): Boolean = time.hour < 12
 
     /** 此刻捕获的定位属于哪个时段；不在任何窗口内返回 null。 */
     fun slotInWindow(time: LocalTime): Slot? = when {
@@ -31,7 +35,7 @@ object PunchRules {
     }
 
     fun isDelayed(time: LocalTime, slot: Slot): Boolean =
-        time.isAfter(targetTime(slot).plus(DELAY_TOLERANCE))
+        targetTime(slot)?.let { time.isAfter(it.plus(DELAY_TOLERANCE)) } ?: false
 
     /** 下一次打卡闹钟时刻（严格晚于 now；处理跨天与时区，DST 间隙由 ZonedDateTime 自动顺延）。 */
     fun nextPunchTime(now: ZonedDateTime): ZonedDateTime {
@@ -57,6 +61,6 @@ object PunchRules {
         when (slotInWindow(now.toLocalTime())) {
             Slot.MORNING -> if (hasMorning) null else Slot.MORNING
             Slot.EVENING -> if (hasEvening) null else Slot.EVENING
-            null -> null
+            Slot.EXTRA, null -> null // slotInWindow 只会返回早/晚
         }
 }

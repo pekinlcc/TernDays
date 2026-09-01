@@ -55,15 +55,18 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
 
     // MARK: 打卡
 
-    /// 窗口内缺记录则取一次定位记录；SLC 唤醒时会带现成位置，直接用
+    /// 窗口内缺记录则取一次定位记录；SLC 唤醒时会带现成位置，直接用。
+    /// 从未有过任何记录（首次安装）时，无论时段立即打一个「首点」（extra）。
     func punchIfNeeded(with location: CLLocation? = nil, completion: (() -> Void)? = nil) {
         let now = Date()
         let today = LocalDate(from: now, in: .current)
-        guard let slot = PunchRules.slotToBackfill(
+        let backfill = PunchRules.slotToBackfill(
             now: now,
             hasMorning: DataStore.shared.hasPunch(date: today, slot: .morning),
             hasEvening: DataStore.shared.hasPunch(date: today, slot: .evening)
-        ) else {
+        )
+        let firstPunch: Slot? = DataStore.shared.hasAnyPunch() ? nil : .extra
+        guard let slot = backfill ?? firstPunch else {
             completion?()
             return
         }

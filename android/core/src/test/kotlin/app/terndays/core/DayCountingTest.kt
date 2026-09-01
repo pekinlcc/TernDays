@@ -25,6 +25,7 @@ class DayCountingTest {
             punch("2026-08-24", Slot.MORNING, "上海"),
             punch("2026-08-24", Slot.EVENING, "上海"),
             null,
+            null,
         )
         assertEquals(listOf(CityShare("CN:上海", "上海", 1.0)), attr.shares)
     }
@@ -35,6 +36,7 @@ class DayCountingTest {
             LocalDate.parse("2026-08-25"),
             punch("2026-08-25", Slot.MORNING, "上海"),
             punch("2026-08-25", Slot.EVENING, "深圳"),
+            null,
             null,
         )
         assertEquals(2, attr.shares.size)
@@ -47,23 +49,24 @@ class DayCountingTest {
     @Test
     fun `单点计整天`() {
         val morningOnly = DayCounting.attributeDay(
-            LocalDate.parse("2026-08-26"), punch("2026-08-26", Slot.MORNING, "北京"), null, null,
+            LocalDate.parse("2026-08-26"), punch("2026-08-26", Slot.MORNING, "北京"), null, null, null,
         )
         assertEquals(listOf(CityShare("CN:北京", "北京", 1.0)), morningOnly.shares)
         val eveningOnly = DayCounting.attributeDay(
-            LocalDate.parse("2026-08-26"), null, punch("2026-08-26", Slot.EVENING, "北京"), null,
+            LocalDate.parse("2026-08-26"), null, punch("2026-08-26", Slot.EVENING, "北京"), null, null,
         )
         assertEquals(listOf(CityShare("CN:北京", "北京", 1.0)), eveningOnly.shares)
     }
 
     @Test
     fun `无记录为空且补记优先`() {
-        val none = DayCounting.attributeDay(LocalDate.parse("2026-08-27"), null, null, null)
+        val none = DayCounting.attributeDay(LocalDate.parse("2026-08-27"), null, null, null, null)
         assertTrue(none.shares.isEmpty())
 
         val overridden = DayCounting.attributeDay(
             LocalDate.parse("2026-08-27"),
             punch("2026-08-27", Slot.MORNING, "北京"),
+            null,
             null,
             DayOverride(LocalDate.parse("2026-08-27"), "CN:杭州", "杭州"),
         )

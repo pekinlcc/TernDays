@@ -22,6 +22,7 @@ enum PunchRules {
     }
 
     static func isDelayed(at date: Date, slot: Slot, timeZone: TimeZone = .current) -> Bool {
+        guard slot != .extra else { return false } // 首点没有目标时刻
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = timeZone
         let c = cal.dateComponents([.hour, .minute], from: date)
@@ -50,7 +51,7 @@ enum PunchRules {
         switch slotInWindow(at: now) {
         case .morning: return hasMorning ? nil : .morning
         case .evening: return hasEvening ? nil : .evening
-        case nil: return nil
+        case .extra, nil: return nil // slotInWindow 只会返回早/晚
         }
     }
 }

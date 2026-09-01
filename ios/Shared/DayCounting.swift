@@ -1,17 +1,26 @@
 import Foundation
 
-/// 计天规则（与 Android :core 对齐，见 docs/requirements.md §2）
+/// 计天规则（与 Android :core 对齐，见 docs/requirements.md §2）：
+/// 一天 = 上半天样本 + 下半天样本；正式早/晚点优先；
+/// 首点（extra）只在对应半天样本缺失时兜底（<12 点顶早点，≥12 点顶晚点）。
 enum DayCounting {
 
     static func attributeDay(
         date: LocalDate,
         morning: Punch?,
         evening: Punch?,
+        extra: Punch?,
         override o: DayOverride?
     ) -> DayAttribution {
         if let o {
             return DayAttribution(date: date, shares: [CityShare(cityKey: o.cityKey, cityName: o.cityName, weight: 1.0)], manual: true)
         }
+        let m = morning ?? extra.flatMap { $0.localHour < 12 ? $0 : nil }
+        let e = evening ?? extra.flatMap { $0.localHour >= 12 ? $0 : nil }
+        return attributeSamples(date: date, morning: m, evening: e)
+    }
+
+    private static func attributeSamples(date: LocalDate, morning: Punch?, evening: Punch?) -> DayAttribution {
         switch (morning, evening) {
         case let (m?, e?):
             if m.cityKey == e.cityKey {
@@ -65,6 +74,7 @@ enum DayCounting {
                 date: d,
                 morning: bySlot["\(d)|\(Slot.morning.rawValue)"],
                 evening: bySlot["\(d)|\(Slot.evening.rawValue)"],
+                extra: bySlot["\(d)|\(Slot.extra.rawValue)"],
                 override: overrideByDate[d]
             )
             days[d] = attr

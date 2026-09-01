@@ -2,7 +2,8 @@ package app.terndays.core
 
 import java.time.LocalDate
 
-enum class Slot { MORNING, EVENING }
+/** EXTRA：非定时的「首点」（首次安装立即记录），不占早/晚槽，仅作半天兜底样本。 */
+enum class Slot { MORNING, EVENING, EXTRA }
 
 /** 一次打卡记录（早点/晚点）。localDate 为捕获时刻在当时时区下的本地日期。 */
 data class Punch(

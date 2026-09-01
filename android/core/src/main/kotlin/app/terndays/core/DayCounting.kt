@@ -4,22 +4,34 @@ import java.time.LocalDate
 
 /**
  * 计天规则（已与产品确认）：
- *  - 早晚两点同城 → 该城市 +1 天
- *  - 早晚两点异城 → 各 +0.5 天
- *  - 只有一个点   → 该点城市 +1 天
- *  - 全天无记录   → 计入「无记录」，可手动补记（补记整天 +1，优先于打卡点）
+ *  - 一天看作「上半天样本 + 下半天样本」：早点是上半天样本，晚点是下半天样本
+ *  - 两个样本同城 → 该城市 +1 天；异城 → 各 +0.5 天；只有一个样本 → 该城市 +1 天
+ *  - 全天无样本 → 计入「无记录」，可手动补记（补记整天 +1，优先于打卡点）
+ *  - 首点（EXTRA，首次安装立即记录的点）只做兜底：正式早/晚点缺失时，按首点捕获时刻
+ *    所在半天顶替对应样本（<12:00 顶早点，≥12:00 顶晚点）；正式点永远优先。
+ *    因此任何一天最多计 1 天，同一半天内的多个点不会拆出额外的半天。
  */
 object DayCounting {
+
+    private fun localTime(p: Punch) =
+        java.time.Instant.ofEpochMilli(p.epochMs).atZone(java.time.ZoneId.of(p.zoneId)).toLocalTime()
 
     fun attributeDay(
         date: LocalDate,
         morning: Punch?,
         evening: Punch?,
+        extra: Punch?,
         override: DayOverride?,
     ): DayAttribution {
         if (override != null) {
             return DayAttribution(date, listOf(CityShare(override.cityKey, override.cityName, 1.0)), manual = true)
         }
+        val m = morning ?: extra?.takeIf { PunchRules.isMorningHalf(localTime(it)) }
+        val e = evening ?: extra?.takeIf { !PunchRules.isMorningHalf(localTime(it)) }
+        return attributeSamples(date, m, e)
+    }
+
+    private fun attributeSamples(date: LocalDate, morning: Punch?, evening: Punch?): DayAttribution {
         return when {
             morning != null && evening != null ->
                 if (morning.cityKey == evening.cityKey) {
@@ -70,7 +82,13 @@ object DayCounting {
         var recorded = 0
         var d = first
         while (!d.isAfter(last)) {
-            val attr = attributeDay(d, bySlot[d to Slot.MORNING], bySlot[d to Slot.EVENING], overrideByDate[d])
+            val attr = attributeDay(
+                d,
+                bySlot[d to Slot.MORNING],
+                bySlot[d to Slot.EVENING],
+                bySlot[d to Slot.EXTRA],
+                overrideByDate[d],
+            )
             days[d] = attr
             if (attr.shares.isEmpty()) unrecorded.add(d) else recorded++
             d = d.plusDays(1)

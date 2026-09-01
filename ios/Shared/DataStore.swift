@@ -76,6 +76,11 @@ final class DataStore {
         queue.sync { punches.contains { $0.localDate == date && $0.slot == slot } }
     }
 
+    /// 是否已有任何打卡记录（用于判定「首次安装的首点」）
+    func hasAnyPunch() -> Bool {
+        queue.sync { !punches.isEmpty }
+    }
+
     func punchesForYear(_ year: Int) -> [Punch] {
         queue.sync { punches.filter { $0.localDate.year == year }.sorted { $0.epochMs < $1.epochMs } }
     }

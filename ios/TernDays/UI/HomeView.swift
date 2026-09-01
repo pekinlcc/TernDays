@@ -126,6 +126,7 @@ struct HomeView: View {
         let punches = data?.punches.filter { $0.localDate == today } ?? []
         let morning = punches.first { $0.slot == .morning }
         let evening = punches.first { $0.slot == .evening }
+        let extra = punches.first { $0.slot == .extra }
         return TdCard {
             VStack(alignment: .leading, spacing: 10) {
                 Text("今日打卡 · \(today.month)月\(today.day)日 \(today.weekdayCn)")
@@ -135,6 +136,10 @@ struct HomeView: View {
                     Rectangle().fill(Td.border).frame(width: 1, height: 40)
                     punchCell(icon: "sunset", tint: Td.faint, label: "晚 · 17:00", punch: evening)
                         .padding(.leading, 16)
+                }
+                if let extra {
+                    Text("首点 \(extra.clock) · \(extra.cityName) ✓（已记录当前位置）")
+                        .font(.system(size: 11)).foregroundColor(Td.faint)
                 }
             }
             .padding(.horizontal, 16)

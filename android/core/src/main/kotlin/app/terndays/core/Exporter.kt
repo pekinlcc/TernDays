@@ -31,6 +31,7 @@ object Exporter {
         val date: LocalDate,
         val morning: Punch?,
         val evening: Punch?,
+        val extra: Punch?,
         val attribution: DayAttribution,
     )
 
@@ -42,7 +43,13 @@ object Exporter {
             if (cur == null || p.epochMs < cur.epochMs) bySlot[k] = p
         }
         return stats.days.map { (date, attr) ->
-            DailyRow(date, bySlot[date to Slot.MORNING], bySlot[date to Slot.EVENING], attr)
+            DailyRow(
+                date,
+                bySlot[date to Slot.MORNING],
+                bySlot[date to Slot.EVENING],
+                bySlot[date to Slot.EXTRA],
+                attr,
+            )
         }
     }
 
@@ -65,6 +72,7 @@ object Exporter {
             if (r.morning?.delayed == true) notes.add("早点延迟")
             if (r.evening?.delayed == true) notes.add("晚点延迟")
             if (r.morning?.fromCache == true || r.evening?.fromCache == true) notes.add("用了缓存位置")
+            if (r.extra != null) notes.add("首点 ${punchTime(r.extra)} ${r.extra.cityName}")
             rows.add(
                 listOf(
                     r.date.format(DATE),

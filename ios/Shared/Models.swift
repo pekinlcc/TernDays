@@ -84,6 +84,8 @@ struct LocalDate: Hashable, Comparable, Codable, CustomStringConvertible {
 enum Slot: String, Codable, CaseIterable {
     case morning = "MORNING"
     case evening = "EVENING"
+    /// 非定时的「首点」（首次安装立即记录），不占早/晚槽，仅作半天兜底样本
+    case extra = "EXTRA"
 }
 
 struct Punch: Codable, Identifiable {
@@ -106,6 +108,14 @@ struct Punch: Codable, Identifiable {
         cal.timeZone = TimeZone(identifier: zoneId) ?? .current
         let c = cal.dateComponents([.hour, .minute], from: date)
         return String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
+    }
+
+    /// 捕获时刻在其所在时区的小时（判定首点归属的半天）
+    var localHour: Int {
+        let date = Date(timeIntervalSince1970: Double(epochMs) / 1000)
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: zoneId) ?? .current
+        return cal.component(.hour, from: date)
     }
 }
 

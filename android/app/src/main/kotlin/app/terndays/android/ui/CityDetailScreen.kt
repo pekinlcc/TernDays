@@ -258,6 +258,7 @@ private fun DetailListCard(cityDays: Map<LocalDate, CityDay>, punchesByDate: Map
                 val punches = punchesByDate[date] ?: emptyList()
                 val m = punches.firstOrNull { it.slot == Slot.MORNING }
                 val e = punches.firstOrNull { it.slot == Slot.EVENING }
+                val x = punches.firstOrNull { it.slot == Slot.EXTRA }
                 Row(
                     Modifier.fillMaxWidth().padding(vertical = 11.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -269,11 +270,12 @@ private fun DetailListCard(cityDays: Map<LocalDate, CityDay>, punchesByDate: Map
                         )
                         val sub = when {
                             day.manual -> "手动补记"
-                            m == null && e == null -> "无打卡记录"
+                            m == null && e == null && x == null -> "无打卡记录"
                             else -> listOfNotNull(
-                                m?.let { "早 ${punchClock(it)} ${it.cityName}" },
-                                e?.let { "晚 ${punchClock(it)} ${it.cityName}" },
-                            ).joinToString(" · ")
+                                m?.let { it.epochMs to "早 ${punchClock(it)} ${it.cityName}" },
+                                e?.let { it.epochMs to "晚 ${punchClock(it)} ${it.cityName}" },
+                                x?.let { it.epochMs to "首 ${punchClock(it)} ${it.cityName}" },
+                            ).sortedBy { it.first }.joinToString(" · ") { it.second }
                         }
                         Text(sub, fontSize = 12.sp, color = Td.Muted)
                     }

@@ -56,11 +56,15 @@ class PunchService : Service() {
         val requested = intent?.getStringExtra(PunchScheduler.EXTRA_SLOT)
             ?.let { runCatching { Slot.valueOf(it) }.getOrNull() }
         val inWindow = PunchRules.slotInWindow(now.toLocalTime())
-        val slot = inWindow ?: run {
-            // 闹钟被系统推迟到窗口外：本时段作废，提醒可补记
-            if (requested != null) notifyRemind("未能按时记录${slotLabel(requested)}", "打开应用可查看，无记录的日子可手动补记")
-            finish()
-            return START_NOT_STICKY
+        val slot = when {
+            inWindow != null -> inWindow
+            requested == Slot.EXTRA -> Slot.EXTRA // 首点：首次安装立即记录，不限时段
+            else -> {
+                // 闹钟被系统推迟到窗口外：本时段作废，提醒可补记
+                if (requested != null) notifyRemind("未能按时记录${slotLabel(requested)}", "打开应用可查看，无记录的日子可手动补记")
+                finish()
+                return START_NOT_STICKY
+            }
         }
 
         val db = PunchDb.get(this)
@@ -214,6 +218,7 @@ class PunchService : Service() {
         private fun slotLabel(slot: Slot) = when (slot) {
             Slot.MORNING -> "早上 7 点"
             Slot.EVENING -> "下午 5 点"
+            Slot.EXTRA -> "首点"
         }
 
         fun start(context: Context, slot: Slot?) {
@@ -241,7 +246,12 @@ class PunchService : Service() {
             }
         }
 
-        /** 当前处于打卡窗口内且该时段缺记录时补打（打开应用/开机时调用）。 */
+        /**
+         * 打开应用/开机时调用：
+         *  1. 处于打卡窗口内且该时段缺记录 → 补打该时段；
+         *  2. 否则若从未有过任何记录（首次安装）→ 立即打一个「首点」（EXTRA），
+         *     不占早/晚槽，只作所在半天的兜底样本。
+         */
         fun maybeBackfill(context: Context) {
             if (!Prefs.onboardingDone(context)) return
             val db = PunchDb.get(context)
@@ -251,7 +261,10 @@ class PunchService : Service() {
                 hasMorning = db.hasPunch(now.toLocalDate(), Slot.MORNING),
                 hasEvening = db.hasPunch(now.toLocalDate(), Slot.EVENING),
             )
-            if (slot != null) start(context, slot)
+            when {
+                slot != null -> start(context, slot)
+                !db.hasAnyPunch() -> start(context, Slot.EXTRA)
+            }
         }
     }
 }

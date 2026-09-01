@@ -177,11 +177,12 @@ struct CityDetailView: View {
                     let punches = punchesByDate[date] ?? []
                     let m = punches.first { $0.slot == .morning }
                     let e = punches.first { $0.slot == .evening }
+                    let x = punches.first { $0.slot == .extra }
                     HStack {
                         VStack(alignment: .leading, spacing: 3) {
                             Text("\(date.month)月\(date.day)日 · \(date.weekdayCn)")
                                 .font(.system(size: 14, weight: .semibold)).foregroundColor(Td.ink)
-                            Text(subText(day: day, m: m, e: e))
+                            Text(subText(day: day, m: m, e: e, x: x))
                                 .font(.system(size: 12)).foregroundColor(Td.muted)
                         }
                         Spacer()
@@ -200,11 +201,13 @@ struct CityDetailView: View {
         }
     }
 
-    private func subText(day: CityDay, m: Punch?, e: Punch?) -> String {
+    private func subText(day: CityDay, m: Punch?, e: Punch?, x: Punch?) -> String {
         if day.manual { return "手动补记" }
-        var parts: [String] = []
-        if let m { parts.append("早 \(m.clock) \(m.cityName)") }
-        if let e { parts.append("晚 \(e.clock) \(e.cityName)") }
-        return parts.isEmpty ? "无打卡记录" : parts.joined(separator: " · ")
+        var parts: [(Int64, String)] = []
+        if let m { parts.append((m.epochMs, "早 \(m.clock) \(m.cityName)")) }
+        if let e { parts.append((e.epochMs, "晚 \(e.clock) \(e.cityName)")) }
+        if let x { parts.append((x.epochMs, "首 \(x.clock) \(x.cityName)")) }
+        if parts.isEmpty { return "无打卡记录" }
+        return parts.sorted { $0.0 < $1.0 }.map(\.1).joined(separator: " · ")
     }
 }

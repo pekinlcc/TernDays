@@ -217,6 +217,7 @@ private fun TodayCard(data: YearData?) {
     val punches = data?.punches?.filter { it.localDate == today } ?: emptyList()
     val morning = punches.firstOrNull { it.slot == Slot.MORNING }
     val evening = punches.firstOrNull { it.slot == Slot.EVENING }
+    val extra = punches.firstOrNull { it.slot == Slot.EXTRA }
 
     TdCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 13.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -227,6 +228,12 @@ private fun TodayCard(data: YearData?) {
                 PunchCell(
                     R.drawable.ic_sunset, Td.Faint, "晚 · 17:00", evening,
                     Modifier.weight(1f).padding(start = 16.dp),
+                )
+            }
+            if (extra != null) {
+                Text(
+                    "首点 ${punchClock(extra)} · ${extra.cityName} ✓（已记录当前位置）",
+                    fontSize = 11.sp, color = Td.Faint,
                 )
             }
         }
