@@ -38,13 +38,19 @@ jobs:
       - name: Resolve version
         id: ver
         run: |
-          VERSION="${{ github.event.inputs.release_version }}"
-          if [ -z "$VERSION" ]; then
-            case "$GITHUB_REF_NAME" in
-              v*) VERSION="$GITHUB_REF_NAME" ;;
-              *) VERSION="dev-${GITHUB_SHA::7}" ;;
-            esac
+          # 发布判定优先级：手动输入 > v* tag 推送 > RELEASE_VERSION 文件里还没打过 tag 的版本
+          RELEASE="${{ github.event.inputs.release_version }}"
+          if [ -z "$RELEASE" ]; then
+            case "$GITHUB_REF_NAME" in v*) RELEASE="$GITHUB_REF_NAME" ;; esac
           fi
+          if [ -z "$RELEASE" ] && [ -f RELEASE_VERSION ]; then
+            FV="v$(tr -d ' \r\n' < RELEASE_VERSION)"
+            if [ "$FV" != "v" ] && ! git ls-remote --exit-code --tags origin "refs/tags/$FV" >/dev/null 2>&1; then
+              RELEASE="$FV"
+            fi
+          fi
+          VERSION="${RELEASE:-dev-${GITHUB_SHA::7}}"
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           cp android/app/build/outputs/apk/release/app-release.apk "TernDays-${VERSION}.apk"
 
@@ -54,10 +60,10 @@ jobs:
           path: TernDays-${{ steps.ver.outputs.version }}.apk
 
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release_version != ''
+        if: steps.ver.outputs.release != ''
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.ver.outputs.version }}
-          name: TernDays ${{ steps.ver.outputs.version }}
-          body_path: docs/release-notes/${{ steps.ver.outputs.version }}.md
-          files: TernDays-${{ steps.ver.outputs.version }}.apk
+          tag_name: ${{ steps.ver.outputs.release }}
+          name: TernDays ${{ steps.ver.outputs.release }}
+          body_path: docs/release-notes/${{ steps.ver.outputs.release }}.md
+          files: TernDays-${{ steps.ver.outputs.release }}.apk

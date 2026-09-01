@@ -59,7 +59,7 @@ pip install geonamescache opencc-python-reimplemented
 python3 tools/build_city_dataset.py android/app/src/main/assets/cities.tsv
 ```
 
-CI（GitHub Actions）在每次 push 时跑单元测试并构建 APK，推 `v*` tag 时自动发布 GitHub Release。
+CI（GitHub Actions）在每次 push 时跑单元测试并构建 APK。**发版**：把新版本号写进根目录 `RELEASE_VERSION`（如 `0.2`），并添加对应的 `docs/release-notes/v0.2.md`，push 后 CI 检测到该版本还没有 tag，就会自动创建 tag 并发布带 APK 的 GitHub Release（推 `v*` tag 或手动触发 workflow 也可以）。
 
 ## 已知限制（v0.1）
 
