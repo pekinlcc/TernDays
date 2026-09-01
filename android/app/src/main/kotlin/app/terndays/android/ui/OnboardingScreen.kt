@@ -30,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -64,12 +65,21 @@ fun OnboardingScreen(onDone: () -> Unit) {
         tick++
         onPauseOrDispose { }
     }
+    // 记录「弹过窗但仍被拒」的步骤:永久拒绝后系统不再弹窗,按钮改为跳系统设置,不做死循环
+    var deniedSteps by remember { mutableStateOf(setOf<Step>()) }
+    var launchedStep by remember { mutableStateOf<Step?>(null) }
     val multiLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) { tick++ }
+    ) {
+        if (!Perms.fineLocation(context)) deniedSteps = deniedSteps + Step.FINE
+        tick++
+    }
     val singleLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { tick++ }
+    ) { granted ->
+        if (!granted) launchedStep?.let { deniedSteps = deniedSteps + it }
+        tick++
+    }
 
     // tick 参与计算以便授权后刷新
     val step = remember(tick) {
@@ -145,6 +155,10 @@ fun OnboardingScreen(onDone: () -> Unit) {
         Box(
             Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(14.dp)).background(Td.Accent)
                 .clickable {
+                    if (step in deniedSteps) {
+                        Perms.openAppSettings(context)
+                        return@clickable
+                    }
                     when (step) {
                         Step.FINE -> multiLauncher.launch(
                             arrayOf(
@@ -154,12 +168,14 @@ fun OnboardingScreen(onDone: () -> Unit) {
                         )
                         Step.BACKGROUND ->
                             if (Build.VERSION.SDK_INT >= 29) {
+                                launchedStep = Step.BACKGROUND
                                 singleLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
                             } else {
                                 tick++
                             }
                         Step.NOTIFY ->
                             if (Build.VERSION.SDK_INT >= 33) {
+                                launchedStep = Step.NOTIFY
                                 singleLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                             } else {
                                 Perms.openAppSettings(context)
@@ -171,7 +187,18 @@ fun OnboardingScreen(onDone: () -> Unit) {
                 },
             contentAlignment = Alignment.Center,
         ) {
-            Text(step.button, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+            Text(
+                if (step in deniedSteps) "去系统设置开启" else step.button,
+                fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Color.White,
+            )
+        }
+        if (step in deniedSteps) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "系统不再弹出授权窗口,请在 设置 → 应用 → TernDays → 权限 中手动开启",
+                fontSize = 12.sp, color = Td.Muted, textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
         Spacer(Modifier.height(6.dp))
         if (step == Step.DONE) {

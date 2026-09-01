@@ -49,9 +49,20 @@ class PunchService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        ServiceCompat.startForeground(
-            this, NOTIF_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
-        )
+        try {
+            ServiceCompat.startForeground(
+                this, NOTIF_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
+            )
+        } catch (_: SecurityException) {
+            // Android 14+ 定位权限被收回后,location 类型前台服务直接抛异常:
+            // 不能崩,发提醒并安静退出(下一次闹钟到点会再试)
+            notifyRemind("定位权限被关闭", "打卡需要「始终允许」定位权限,请到设置中重新开启")
+            stopSelf()
+            return START_NOT_STICKY
+        } catch (_: IllegalStateException) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
         val now = ZonedDateTime.now()
         val requested = intent?.getStringExtra(PunchScheduler.EXTRA_SLOT)
@@ -152,19 +163,21 @@ class PunchService : Service() {
 
         Thread {
             try {
-                // 交叉验证：top-3 候选 + 上一次打卡的行程连续性 + 定位误差圈，
-                // 消掉真实边界（深圳/香港、珠海/澳门…）附近的最近邻模糊
+                // 交叉验证：top-3 候选 + 行程连续性锚点 + 定位误差圈，
+                // 消掉真实边界（深圳/香港、珠海/澳门…）附近的最近邻模糊。
+                // 锚点 = 最近一条非改判打卡(当日有手动更正则以更正为准),防粘滞链自续期。
+                val db = PunchDb.get(this)
                 val accuracy = if (location.hasAccuracy()) location.accuracy.toDouble() else null
                 val candidates = Cities.get(this).nearestByCity(location.latitude, location.longitude, 3)
-                val prev = PunchDb.get(this).latestResolvedPunch()?.let {
+                val prev = db.latestAnchorPunch()?.let { anchor ->
+                    val key = db.overrideFor(anchor.localDate)?.cityKey ?: anchor.cityKey
                     CityResolver.Prev(
-                        cityKey = it.cityKey,
-                        lat = it.lat,
-                        lng = it.lng,
-                        ageHours = (System.currentTimeMillis() - it.epochMs) / 3_600_000.0,
+                        cityKey = key,
+                        ageHours = (System.currentTimeMillis() - anchor.epochMs) / 3_600_000.0,
                     )
                 }
-                val match = CityResolver.resolve(candidates, accuracy, prev)?.match
+                val resolution = CityResolver.resolve(candidates, accuracy, prev)
+                val match = resolution?.match
                 val now = ZonedDateTime.now()
                 val zone = ZoneId.systemDefault()
                 val punch = Punch(
@@ -179,9 +192,14 @@ class PunchService : Service() {
                     cityName = match?.cityName ?: "未知位置",
                     delayed = PunchRules.isDelayed(now.toLocalTime(), slot),
                     fromCache = fromCache,
+                    viaContext = resolution?.viaContext == true,
                 )
-                PunchDb.get(this).insertPunch(punch)
+                db.insertPunch(punch)
                 app.terndays.android.widget.TernDaysWidgetProvider.updateAll(this)
+                app.terndays.android.DataBus.bump()
+            } catch (_: Exception) {
+                // 落库线程不允许把整个进程带崩;失败提醒用户手动补
+                runCatching { notifyRemind("打卡保存失败", "打开应用可自动补打,或在设置中手动补记") }
             } finally {
                 handler.post { finish() }
             }
@@ -267,17 +285,25 @@ class PunchService : Service() {
          */
         fun maybeBackfill(context: Context) {
             if (!Prefs.onboardingDone(context)) return
-            val db = PunchDb.get(context)
-            val now = LocalDateTime.now()
-            val slot = PunchRules.slotToBackfill(
-                now,
-                hasMorning = db.hasPunch(now.toLocalDate(), Slot.MORNING),
-                hasEvening = db.hasPunch(now.toLocalDate(), Slot.EVENING),
-            )
-            when {
-                slot != null -> start(context, slot)
-                !db.hasAnyPunch() -> start(context, Slot.EXTRA)
-            }
+            val app = context.applicationContext
+            // DB 查询(首次含建库)不占主线程
+            Thread {
+                try {
+                    val db = PunchDb.get(app)
+                    val now = LocalDateTime.now()
+                    val slot = PunchRules.slotToBackfill(
+                        now,
+                        hasMorning = db.hasPunch(now.toLocalDate(), Slot.MORNING),
+                        hasEvening = db.hasPunch(now.toLocalDate(), Slot.EVENING),
+                    )
+                    when {
+                        slot != null -> start(app, slot)
+                        !db.hasAnyPunch() -> start(app, Slot.EXTRA)
+                    }
+                } catch (_: Exception) {
+                    // 补打检查失败不影响主流程,下次打开再试
+                }
+            }.apply { isDaemon = true }.start()
         }
     }
 }

@@ -41,6 +41,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import app.terndays.android.DataBus
 import app.terndays.android.R
 import app.terndays.android.db.PunchDb
 import app.terndays.android.widget.TernDaysWidgetProvider
@@ -72,7 +73,8 @@ fun HomeScreen(
         tick++
         onPauseOrDispose { }
     }
-    val data by produceState<YearData?>(initialValue = null, year, tick) {
+    val dataVersion = DataBus.version.intValue
+    val data by produceState<YearData?>(initialValue = null, year, tick, dataVersion) {
         value = loadYearData(context, year)
     }
     var correctingToday by remember { mutableStateOf(false) }

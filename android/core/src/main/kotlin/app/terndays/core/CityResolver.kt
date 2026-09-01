@@ -17,8 +17,13 @@ package app.terndays.core
  */
 object CityResolver {
 
-    /** 上一次成功打卡的解析上下文。 */
-    data class Prev(val cityKey: String, val lat: Double, val lng: Double, val ageHours: Double)
+    /**
+     * 行程连续性上下文。cityKey 应取最近一条「锚点」记录——即非改判(viaContext=false)
+     * 的打卡,当日有手动更正时以更正城市为准;ageHours 也按该锚点计。
+     * 这样 36h 上限约束的是整条粘滞链,而不是相邻两次打卡的间隔,
+     * 链条不会因为「被粘住的打卡成为下一次的 prev」而无限自续期。
+     */
+    data class Prev(val cityKey: String, val ageHours: Double)
 
     data class Resolution(
         val match: CityMatcher.Match,

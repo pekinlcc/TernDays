@@ -2,16 +2,19 @@ package app.terndays.android.db
 
 import android.content.ContentValues
 import android.content.Context
+import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import app.terndays.core.CityMatcher
 import app.terndays.core.DayOverride
+import app.terndays.core.HistoryReplay
 import app.terndays.core.Punch
 import app.terndays.core.Slot
 import java.time.LocalDate
 
 /** 本地 SQLite 存储：打卡记录 + 手动补记。同一 (日期, 时段) 只保留最早插入的一条。 */
 class PunchDb private constructor(context: Context) :
-    SQLiteOpenHelper(context.applicationContext, "terndays.db", null, 1) {
+    SQLiteOpenHelper(context.applicationContext, "terndays.db", null, 2) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -28,6 +31,7 @@ class PunchDb private constructor(context: Context) :
                 city_name TEXT NOT NULL,
                 delayed INTEGER NOT NULL DEFAULT 0,
                 from_cache INTEGER NOT NULL DEFAULT 0,
+                via_context INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(local_date, slot) ON CONFLICT IGNORE
             )""",
         )
@@ -40,7 +44,36 @@ class PunchDb private constructor(context: Context) :
         )
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE punch ADD COLUMN via_context INTEGER NOT NULL DEFAULT 0")
+        }
+    }
+
+    private val punchColumns =
+        "local_date, slot, epoch_ms, zone_id, lat, lng, accuracy, city_key, city_name, delayed, from_cache, via_context"
+
+    private fun Cursor.readPunch() = Punch(
+        localDate = LocalDate.parse(getString(0)),
+        slot = Slot.valueOf(getString(1)),
+        epochMs = getLong(2),
+        zoneId = getString(3),
+        lat = getDouble(4),
+        lng = getDouble(5),
+        accuracyM = if (isNull(6)) null else getDouble(6),
+        cityKey = getString(7),
+        cityName = getString(8),
+        delayed = getInt(9) == 1,
+        fromCache = getInt(10) == 1,
+        viaContext = getInt(11) == 1,
+    )
+
+    private fun queryPunches(where: String, args: Array<String>?): List<Punch> =
+        readableDatabase.rawQuery("SELECT $punchColumns FROM punch $where", args).use { c ->
+            val out = ArrayList<Punch>(c.count)
+            while (c.moveToNext()) out.add(c.readPunch())
+            out
+        }
 
     /** @return true = 新插入；false = 该时段已有记录（被忽略） */
     fun insertPunch(p: Punch): Boolean {
@@ -56,6 +89,7 @@ class PunchDb private constructor(context: Context) :
             put("city_name", p.cityName)
             put("delayed", if (p.delayed) 1 else 0)
             put("from_cache", if (p.fromCache) 1 else 0)
+            put("via_context", if (p.viaContext) 1 else 0)
         }
         return writableDatabase.insertWithOnConflict("punch", null, values, SQLiteDatabase.CONFLICT_IGNORE) != -1L
     }
@@ -63,132 +97,33 @@ class PunchDb private constructor(context: Context) :
     fun hasAnyPunch(): Boolean =
         readableDatabase.rawQuery("SELECT 1 FROM punch LIMIT 1", null).use { it.moveToFirst() }
 
-    /** 最近一次成功解析的打卡（按打卡时间），供城市判定的行程连续性交叉验证。 */
-    fun latestResolvedPunch(): Punch? =
-        readableDatabase.rawQuery(
-            "SELECT local_date, slot, epoch_ms, zone_id, lat, lng, accuracy, city_key, city_name, delayed, from_cache " +
-                "FROM punch WHERE city_key != 'unknown' ORDER BY epoch_ms DESC LIMIT 1",
-            null,
-        ).use { c ->
-            if (!c.moveToNext()) return null
-            Punch(
-                localDate = LocalDate.parse(c.getString(0)),
-                slot = Slot.valueOf(c.getString(1)),
-                epochMs = c.getLong(2),
-                zoneId = c.getString(3),
-                lat = c.getDouble(4),
-                lng = c.getDouble(5),
-                accuracyM = if (c.isNull(6)) null else c.getDouble(6),
-                cityKey = c.getString(7),
-                cityName = c.getString(8),
-                delayed = c.getInt(9) == 1,
-                fromCache = c.getInt(10) == 1,
-            )
-        }
-
-    /**
-     * 用当前城市库按原始坐标重解析全部打卡（城市库升级后修正历史误判）。
-     * 手动更正（day_override）不受影响。@return 实际改动的记录数。
-     */
-    fun remapCities(mapper: (lat: Double, lng: Double) -> Pair<String, String>?): Int {
-        val db = writableDatabase
-        var changed = 0
-        db.beginTransaction()
-        try {
-            val updates = ArrayList<Triple<Long, String, String>>()
-            db.rawQuery("SELECT id, lat, lng, city_key, city_name FROM punch", null).use { c ->
-                while (c.moveToNext()) {
-                    val (key, name) = mapper(c.getDouble(1), c.getDouble(2)) ?: continue
-                    if (key != c.getString(3) || name != c.getString(4)) {
-                        updates.add(Triple(c.getLong(0), key, name))
-                    }
-                }
-            }
-            for ((id, key, name) in updates) {
-                val values = ContentValues().apply {
-                    put("city_key", key)
-                    put("city_name", name)
-                }
-                changed += db.update("punch", values, "id=?", arrayOf(id.toString()))
-            }
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
-        }
-        return changed
-    }
-
     fun hasPunch(date: LocalDate, slot: Slot): Boolean =
         readableDatabase.rawQuery(
             "SELECT 1 FROM punch WHERE local_date=? AND slot=? LIMIT 1",
             arrayOf(date.toString(), slot.name),
         ).use { it.moveToFirst() }
 
+    /**
+     * 行程连续性锚点:最近一条**非改判**(via_context=0)且解析成功的打卡。
+     * 被连续性/误差圈粘住的点不作锚,36h 上限才能真正限制整条粘滞链。
+     * 若锚点当日已被手动更正,调用方应以更正城市为准(见 [overrideFor])。
+     */
+    fun latestAnchorPunch(): Punch? =
+        queryPunches("WHERE city_key != 'unknown' AND via_context = 0 ORDER BY epoch_ms DESC LIMIT 1", null)
+            .firstOrNull()
+
+    fun overrideFor(date: LocalDate): DayOverride? =
+        readableDatabase.rawQuery(
+            "SELECT local_date, city_key, city_name FROM day_override WHERE local_date=?",
+            arrayOf(date.toString()),
+        ).use { c ->
+            if (c.moveToNext()) DayOverride(LocalDate.parse(c.getString(0)), c.getString(1), c.getString(2)) else null
+        }
+
     fun punchesForYear(year: Int): List<Punch> =
-        readableDatabase.rawQuery(
-            "SELECT local_date, slot, epoch_ms, zone_id, lat, lng, accuracy, city_key, city_name, delayed, from_cache " +
-                "FROM punch WHERE local_date LIKE ? ORDER BY local_date, slot",
-            arrayOf("$year-%"),
-        ).use { c ->
-            val out = ArrayList<Punch>(c.count)
-            while (c.moveToNext()) {
-                out.add(
-                    Punch(
-                        localDate = LocalDate.parse(c.getString(0)),
-                        slot = Slot.valueOf(c.getString(1)),
-                        epochMs = c.getLong(2),
-                        zoneId = c.getString(3),
-                        lat = c.getDouble(4),
-                        lng = c.getDouble(5),
-                        accuracyM = if (c.isNull(6)) null else c.getDouble(6),
-                        cityKey = c.getString(7),
-                        cityName = c.getString(8),
-                        delayed = c.getInt(9) == 1,
-                        fromCache = c.getInt(10) == 1,
-                    ),
-                )
-            }
-            out
-        }
+        queryPunches("WHERE local_date LIKE ? ORDER BY local_date, slot", arrayOf("$year-%"))
 
-    fun overridesForYear(year: Int): List<DayOverride> =
-        readableDatabase.rawQuery(
-            "SELECT local_date, city_key, city_name FROM day_override WHERE local_date LIKE ?",
-            arrayOf("$year-%"),
-        ).use { c ->
-            val out = ArrayList<DayOverride>(c.count)
-            while (c.moveToNext()) {
-                out.add(DayOverride(LocalDate.parse(c.getString(0)), c.getString(1), c.getString(2)))
-            }
-            out
-        }
-
-    fun allPunches(): List<Punch> =
-        readableDatabase.rawQuery(
-            "SELECT local_date, slot, epoch_ms, zone_id, lat, lng, accuracy, city_key, city_name, delayed, from_cache " +
-                "FROM punch ORDER BY local_date, slot",
-            null,
-        ).use { c ->
-            val out = ArrayList<Punch>(c.count)
-            while (c.moveToNext()) {
-                out.add(
-                    Punch(
-                        localDate = LocalDate.parse(c.getString(0)),
-                        slot = Slot.valueOf(c.getString(1)),
-                        epochMs = c.getLong(2),
-                        zoneId = c.getString(3),
-                        lat = c.getDouble(4),
-                        lng = c.getDouble(5),
-                        accuracyM = if (c.isNull(6)) null else c.getDouble(6),
-                        cityKey = c.getString(7),
-                        cityName = c.getString(8),
-                        delayed = c.getInt(9) == 1,
-                        fromCache = c.getInt(10) == 1,
-                    ),
-                )
-            }
-            out
-        }
+    fun allPunches(): List<Punch> = queryPunches("ORDER BY local_date, slot", null)
 
     fun allOverrides(): List<DayOverride> =
         readableDatabase.rawQuery("SELECT local_date, city_key, city_name FROM day_override", null).use { c ->
@@ -198,6 +133,58 @@ class PunchDb private constructor(context: Context) :
             }
             out
         }
+
+    /**
+     * 城市库升级/导入后的历史重解析:按时间**重放**并走与实时打卡相同的交叉验证
+     * (HistoryReplay),而不是裸最近邻。手动更正不动。@return 城市被修正的记录数。
+     */
+    fun replayResolveAll(matcher: CityMatcher): Int {
+        val items = readableDatabase.rawQuery(
+            "SELECT id, local_date, epoch_ms, lat, lng, accuracy, city_key, city_name FROM punch",
+            null,
+        ).use { c ->
+            val out = ArrayList<HistoryReplay.Item>(c.count)
+            while (c.moveToNext()) {
+                out.add(
+                    HistoryReplay.Item(
+                        id = c.getLong(0),
+                        localDate = LocalDate.parse(c.getString(1)),
+                        epochMs = c.getLong(2),
+                        lat = c.getDouble(3),
+                        lng = c.getDouble(4),
+                        accuracyM = if (c.isNull(5)) null else c.getDouble(5),
+                        cityKey = c.getString(6),
+                        cityName = c.getString(7),
+                    ),
+                )
+            }
+            out
+        }
+        if (items.isEmpty()) return 0
+        val overrides = allOverrides().associate { it.localDate to it.cityKey }
+        val outcomes = HistoryReplay.replay(matcher, items, overrides)
+
+        val db = writableDatabase
+        var changed = 0
+        db.beginTransaction()
+        try {
+            for (o in outcomes) {
+                val values = ContentValues().apply {
+                    put("via_context", if (o.viaContext) 1 else 0)
+                    if (o.changed) {
+                        put("city_key", o.cityKey)
+                        put("city_name", o.cityName)
+                    }
+                }
+                db.update("punch", values, "id=?", arrayOf(o.id.toString()))
+                if (o.changed) changed++
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return changed
+    }
 
     data class MergeResult(val punchesAdded: Int, val punchesSkipped: Int, val overridesAdded: Int, val overridesSkipped: Int)
 
@@ -234,6 +221,18 @@ class PunchDb private constructor(context: Context) :
         }
         return MergeResult(pAdd, pSkip, oAdd, oSkip)
     }
+
+    fun overridesForYear(year: Int): List<DayOverride> =
+        readableDatabase.rawQuery(
+            "SELECT local_date, city_key, city_name FROM day_override WHERE local_date LIKE ?",
+            arrayOf("$year-%"),
+        ).use { c ->
+            val out = ArrayList<DayOverride>(c.count)
+            while (c.moveToNext()) {
+                out.add(DayOverride(LocalDate.parse(c.getString(0)), c.getString(1), c.getString(2)))
+            }
+            out
+        }
 
     fun setOverride(o: DayOverride) {
         val values = ContentValues().apply {

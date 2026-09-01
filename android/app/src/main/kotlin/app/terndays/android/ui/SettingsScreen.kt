@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import app.terndays.android.DataBus
 import app.terndays.android.R
 import app.terndays.android.db.PunchDb
 import app.terndays.android.geo.Cities
@@ -72,7 +73,8 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
     }
 
     val year = LocalDate.now().year
-    val data by produceState<YearData?>(initialValue = null, tick) {
+    val dataVersion = DataBus.version.intValue
+    val data by produceState<YearData?>(initialValue = null, tick, dataVersion) {
         value = loadYearData(context, year)
     }
 

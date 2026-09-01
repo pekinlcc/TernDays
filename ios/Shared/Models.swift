@@ -101,6 +101,9 @@ struct Punch: Codable, Identifiable {
     let cityName: String
     var delayed: Bool = false
     var fromCache: Bool = false
+    /// true = 城市由行程连续性/误差圈改判(非几何最近);此类点不作连续性锚点。
+    /// Optional 以兼容旧版存档(缺键按 nil 处理)。
+    var viaContext: Bool? = false
 
     var clock: String {
         let date = Date(timeIntervalSince1970: Double(epochMs) / 1000)

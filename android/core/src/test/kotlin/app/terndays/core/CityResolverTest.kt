@@ -12,7 +12,7 @@ class CityResolverTest {
     private val sz = "CN:深圳"
     private val hk = "HK:香港"
 
-    private fun prevSz(age: Double = 14.0) = CityResolver.Prev(sz, 22.54, 114.05, age)
+    private fun prevSz(age: Double = 14.0) = CityResolver.Prev(sz, age)
 
     @Test
     fun `无上次记录取最近`() {
@@ -50,7 +50,7 @@ class CityResolverTest {
     @Test
     fun `top1 极近为明确证据不被上次的错误记录带偏`() {
         // 上次错判成香港，如今人明确落在深圳锚点上（0.2km）
-        val prevHk = CityResolver.Prev(hk, 22.50, 114.06, 14.0)
+        val prevHk = CityResolver.Prev(hk, 14.0)
         val r = CityResolver.resolve(listOf(m(sz, "深圳", 0.2), m(hk, "香港", 0.8)), 30.0, prevHk)!!
         assertEquals(sz, r.match.cityKey)
         assertFalse(r.viaContext)
@@ -86,7 +86,7 @@ class CityResolverTest {
     fun `上次记录过旧或不在候选中都取最近`() {
         val cands = listOf(m(hk, "香港", 0.9), m(sz, "深圳", 1.0))
         assertEquals(hk, CityResolver.resolve(cands, 30.0, prevSz(age = 48.0))!!.match.cityKey)
-        val prevBj = CityResolver.Prev("CN:北京", 39.9, 116.4, 14.0)
+        val prevBj = CityResolver.Prev("CN:北京", 14.0)
         assertEquals(hk, CityResolver.resolve(cands, 30.0, prevBj)!!.match.cityKey)
     }
 

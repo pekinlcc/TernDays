@@ -77,6 +77,13 @@ object DayCounting {
         }
         val overrideByDate = overrides.filter { it.localDate.year == year }.associateBy { it.localDate }
 
+        // 「无记录」从当年首条记录之日起算:安装/开始使用之前的日子不是「漏记」,
+        // 不再让新装用户首页一上来就显示「另有 240+ 天无记录」
+        val firstRecordDate = minOf(
+            bySlot.keys.minOfOrNull { it.first } ?: LocalDate.MAX,
+            overrideByDate.keys.minOrNull() ?: LocalDate.MAX,
+        )
+
         val days = LinkedHashMap<LocalDate, DayAttribution>()
         val unrecorded = ArrayList<LocalDate>()
         var recorded = 0
@@ -90,7 +97,11 @@ object DayCounting {
                 overrideByDate[d],
             )
             days[d] = attr
-            if (attr.shares.isEmpty()) unrecorded.add(d) else recorded++
+            if (attr.shares.isEmpty()) {
+                if (!d.isBefore(firstRecordDate)) unrecorded.add(d)
+            } else {
+                recorded++
+            }
             d = d.plusDays(1)
         }
 

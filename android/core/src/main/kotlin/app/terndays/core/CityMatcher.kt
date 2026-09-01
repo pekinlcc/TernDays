@@ -9,15 +9,19 @@ import kotlin.math.sqrt
 
 /**
  * 离线反地理编码：对内置城市点云做最近邻。
- * 数据格式（TSV）：lat \t lng \t key \t display，见 tools/build_city_dataset.py。
+ * 数据格式（TSV）：lat \t lng \t key \t display [\t 拼音别名]，见 tools/build_city_dataset.py。
  */
 class CityMatcher private constructor(
     private val lats: DoubleArray,
     private val lngs: DoubleArray,
     private val keys: Array<String>,
     private val names: Array<String>,
+    private val aliases: Array<String>,
 ) {
     data class Match(val cityKey: String, val cityName: String, val distanceKm: Double)
+
+    /** 搜索命中:region 用于区分重名城市(如加拿大伦敦 vs 英国伦敦),中国城市为空。 */
+    data class SearchHit(val cityKey: String, val cityName: String, val region: String)
 
     val size: Int get() = lats.size
 
@@ -58,40 +62,94 @@ class CityMatcher private constructor(
         return cand
     }
 
-    /** 手动补记时按名称搜索（去重后的城市列表，最多 limit 个）。 */
-    fun searchByName(query: String, limit: Int = 20): List<Pair<String, String>> {
-        val q = query.trim()
+    /** 手动补记/更正时按名称搜索：全等 > 前缀 > 包含,中国城市优先;拼音可搜;带重名消歧地区。 */
+    fun search(query: String, limit: Int = 20): List<SearchHit> {
+        val q = query.trim().lowercase()
         if (q.isEmpty()) return emptyList()
-        val out = LinkedHashMap<String, String>()
+        // rank: 0 全等 / 1 前缀 / 2 包含;每城取最好命中
+        val best = HashMap<String, Int>()
+        val nameOf = HashMap<String, String>()
         for (i in keys.indices) {
-            if (names[i].contains(q, ignoreCase = true) || keys[i].contains(q, ignoreCase = true)) {
-                out.putIfAbsent(keys[i], names[i])
-                if (out.size >= limit) break
+            val name = names[i].lowercase()
+            val alias = aliases[i]
+            val cityPart = keys[i].substringAfterLast(':').lowercase()
+            val rank = when {
+                name == q || alias == q || cityPart == q -> 0
+                name.startsWith(q) || alias.startsWith(q) || cityPart.startsWith(q) -> 1
+                name.contains(q) || (alias.isNotEmpty() && alias.contains(q)) || cityPart.contains(q) -> 2
+                else -> continue
+            }
+            val prev = best[keys[i]]
+            if (prev == null || rank < prev) {
+                best[keys[i]] = rank
+                nameOf[keys[i]] = names[i]
             }
         }
-        return out.map { it.key to it.value }
+        return best.entries
+            .sortedWith(compareBy({ it.value }, { if (isDomestic(it.key)) 0 else 1 }, { it.key }))
+            .take(limit)
+            .map { SearchHit(it.key, nameOf[it.key]!!, regionOf(it.key)) }
     }
 
+    /** 旧签名兼容:等价 search() 去掉 region。 */
+    fun searchByName(query: String, limit: Int = 20): List<Pair<String, String>> =
+        search(query, limit).map { it.cityKey to it.cityName }
+
     companion object {
+        private fun isDomestic(key: String) =
+            key.startsWith("CN:") || key.startsWith("HK:") || key.startsWith("MO:")
+
+        /** 重名消歧:境外城市给出国家(+一级行政区码),中国城市无需消歧返回空。 */
+        fun regionOf(key: String): String {
+            if (isDomestic(key)) return ""
+            val cc = key.substringBefore(':')
+            val country = CC_NAMES[cc] ?: cc
+            val admin1 = key.substringAfter(':').substringBefore(':')
+            return if (admin1.isEmpty() || admin1 == cc) country else "$country·$admin1"
+        }
+
+        /** 常见国家码 → 中文名(仅搜索消歧展示用,未覆盖的显示原码)。 */
+        private val CC_NAMES = mapOf(
+            "SG" to "新加坡", "JP" to "日本", "KR" to "韩国", "TH" to "泰国", "MY" to "马来西亚",
+            "ID" to "印尼", "VN" to "越南", "PH" to "菲律宾", "IN" to "印度", "US" to "美国",
+            "CA" to "加拿大", "MX" to "墨西哥", "BR" to "巴西", "AR" to "阿根廷", "GB" to "英国",
+            "FR" to "法国", "DE" to "德国", "IT" to "意大利", "ES" to "西班牙", "PT" to "葡萄牙",
+            "NL" to "荷兰", "BE" to "比利时", "CH" to "瑞士", "AT" to "奥地利", "SE" to "瑞典",
+            "NO" to "挪威", "DK" to "丹麦", "FI" to "芬兰", "RU" to "俄罗斯", "TR" to "土耳其",
+            "AU" to "澳大利亚", "NZ" to "新西兰", "AE" to "阿联酋", "SA" to "沙特", "QA" to "卡塔尔",
+            "EG" to "埃及", "ZA" to "南非", "KH" to "柬埔寨", "LA" to "老挝", "MM" to "缅甸",
+            "NP" to "尼泊尔", "LK" to "斯里兰卡", "PK" to "巴基斯坦", "BD" to "孟加拉",
+            "IE" to "爱尔兰", "PL" to "波兰", "CZ" to "捷克", "HU" to "匈牙利", "GR" to "希腊",
+            "IL" to "以色列", "KZ" to "哈萨克斯坦", "MN" to "蒙古", "TW" to "台湾",
+        )
+
         fun load(input: InputStream): CityMatcher {
             val lats = ArrayList<Double>(36000)
             val lngs = ArrayList<Double>(36000)
             val keys = ArrayList<String>(36000)
             val names = ArrayList<String>(36000)
+            val aliases = ArrayList<String>(36000)
             BufferedReader(input.reader(Charsets.UTF_8)).useLines { lines ->
                 for (line in lines) {
                     if (line.isEmpty()) continue
-                    val t1 = line.indexOf('\t')
-                    val t2 = line.indexOf('\t', t1 + 1)
-                    val t3 = line.indexOf('\t', t2 + 1)
-                    if (t1 < 0 || t2 < 0 || t3 < 0) continue
-                    lats.add(line.substring(0, t1).toDouble())
-                    lngs.add(line.substring(t1 + 1, t2).toDouble())
-                    keys.add(line.substring(t2 + 1, t3))
-                    names.add(line.substring(t3 + 1))
+                    val f = line.split('\t')
+                    if (f.size < 4) continue
+                    // 单行损坏只跳过该行,不让整个城市库加载失败
+                    val lat = f[0].toDoubleOrNull() ?: continue
+                    val lng = f[1].toDoubleOrNull() ?: continue
+                    if (lat !in -90.0..90.0 || lng !in -180.0..180.0) continue
+                    if (f[2].isEmpty() || f[3].isEmpty()) continue
+                    lats.add(lat)
+                    lngs.add(lng)
+                    keys.add(f[2])
+                    names.add(f[3])
+                    aliases.add(if (f.size >= 5) f[4].lowercase() else "")
                 }
             }
-            return CityMatcher(lats.toDoubleArray(), lngs.toDoubleArray(), keys.toTypedArray(), names.toTypedArray())
+            return CityMatcher(
+                lats.toDoubleArray(), lngs.toDoubleArray(),
+                keys.toTypedArray(), names.toTypedArray(), aliases.toTypedArray(),
+            )
         }
 
         fun haversineKm(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {

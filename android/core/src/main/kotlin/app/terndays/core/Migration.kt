@@ -47,6 +47,7 @@ object MigrationCodec {
             o.put("cityName", p.cityName)
             o.put("delayed", p.delayed)
             o.put("fromCache", p.fromCache)
+            if (p.viaContext) o.put("viaContext", true)
             pArr.put(o)
         }
         root.put("punches", pArr)
@@ -91,6 +92,7 @@ object MigrationCodec {
                         cityName = o.getString("cityName"),
                         delayed = o.optBoolean("delayed", false),
                         fromCache = o.optBoolean("fromCache", false),
+                        viaContext = o.optBoolean("viaContext", false),
                     ),
                 )
             } catch (e: Exception) {

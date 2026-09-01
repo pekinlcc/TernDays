@@ -8,10 +8,10 @@ import Foundation
 ///  3. 误差圈优先——定位误差达公里级时坐标不可信，误差范围内沿用上次城市。
 /// 防错误传播：top1 距离极近（<0.8km）且定位可信时不粘。
 enum CityResolver {
+    /// 行程连续性上下文:cityKey 取最近一条「锚点」(非改判)打卡,
+    /// 当日有手动更正时以更正城市为准;ageHours 按锚点计,约束整条粘滞链。
     struct Prev {
         let cityKey: String
-        let lat: Double
-        let lng: Double
         let ageHours: Double
     }
 

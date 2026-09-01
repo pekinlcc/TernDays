@@ -79,8 +79,9 @@ private fun AppRoot() {
                 navArgument("year") { type = NavType.IntType },
             ),
         ) { entry ->
+            // Navigation 取参时已做过一次 URI 解码,这里不能再 decode(含 % 的 key 会失真)
             CityDetailScreen(
-                cityKey = Uri.decode(entry.arguments!!.getString("key")!!),
+                cityKey = entry.arguments!!.getString("key")!!,
                 year = entry.arguments!!.getInt("year"),
                 onBack = { nav.popBackStack() },
             )

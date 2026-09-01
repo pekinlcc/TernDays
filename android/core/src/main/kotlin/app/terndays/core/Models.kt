@@ -18,6 +18,8 @@ data class Punch(
     val cityName: String,
     val delayed: Boolean = false,
     val fromCache: Boolean = false,
+    /** true = 该点城市由行程连续性/误差圈改判(非几何最近);此类点不作连续性锚点 */
+    val viaContext: Boolean = false,
 )
 
 /** 手动补记：整天记入某个城市。 */

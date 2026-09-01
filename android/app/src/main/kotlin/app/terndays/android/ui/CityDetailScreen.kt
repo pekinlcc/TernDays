@@ -39,6 +39,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.terndays.android.DataBus
 import app.terndays.android.R
 import app.terndays.android.db.PunchDb
 import app.terndays.android.widget.TernDaysWidgetProvider
@@ -55,11 +56,17 @@ private data class CityDay(val weight: Double, val manual: Boolean)
 fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
     val context = LocalContext.current
     var tick by remember { mutableIntStateOf(0) }
-    val data by produceState<YearData?>(initialValue = null, cityKey, year, tick) {
+    val dataVersion = DataBus.version.intValue
+    val data by produceState<YearData?>(initialValue = null, cityKey, year, tick, dataVersion) {
         value = loadYearData(context, year)
     }
     val d = data
     var correcting by remember { mutableStateOf<LocalDate?>(null) }
+
+    // 该城市在本年已无任何记录(如最后一天被更正走):自动返回列表,不停留在空页
+    LaunchedEffect(d) {
+        if (d != null && d.stats.cities.none { it.cityKey == cityKey }) onBack()
+    }
 
     val cityDays: Map<LocalDate, CityDay> = remember(d) {
         d?.stats?.days?.mapNotNull { (date, attr) ->
@@ -313,21 +320,23 @@ private fun DetailListCard(
                             "${date.monthValue}月${date.dayOfMonth}日 · ${weekCn(date)}",
                             fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.Ink,
                         )
+                        val detail = listOfNotNull(
+                            m?.let { it.epochMs to "早 ${punchClock(it)} ${it.cityName}" },
+                            e?.let { it.epochMs to "晚 ${punchClock(it)} ${it.cityName}" },
+                            x?.let { it.epochMs to "首 ${punchClock(it)} ${it.cityName}" },
+                        ).sortedBy { it.first }.joinToString(" · ") { it.second }
                         val sub = when {
-                            day.manual -> "手动补记"
-                            m == null && e == null && x == null -> "无打卡记录"
-                            else -> listOfNotNull(
-                                m?.let { it.epochMs to "早 ${punchClock(it)} ${it.cityName}" },
-                                e?.let { it.epochMs to "晚 ${punchClock(it)} ${it.cityName}" },
-                                x?.let { it.epochMs to "首 ${punchClock(it)} ${it.cityName}" },
-                            ).sortedBy { it.first }.joinToString(" · ") { it.second }
+                            day.manual && detail.isEmpty() -> "手动补记"
+                            day.manual -> "已手动更正 · 当天打卡:$detail"
+                            detail.isEmpty() -> "无打卡记录"
+                            else -> detail
                         }
                         Text(sub, fontSize = 12.sp, color = Td.Muted)
                     }
                     val (label, bg, fg) = when {
-                        day.manual -> Triple("补记", Td.WarmSoft, Td.WarmDeep)
+                        day.manual -> Triple("手动", Td.WarmSoft, Td.WarmDeep)
                         day.weight >= 1.0 -> Triple("全天", Td.AccentSoft, Td.AccentDeep)
-                        else -> Triple("半天", Td.WarmSoft, Td.WarmDeep)
+                        else -> Triple("半天", Td.AccentSoft, Td.AccentDeep)
                     }
                     Text(
                         label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = fg,

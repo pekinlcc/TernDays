@@ -38,15 +38,21 @@ class TernDaysWidgetProvider : AppWidgetProvider() {
         private val CITY_NAME_IDS = intArrayOf(R.id.widget_city_name_1, R.id.widget_city_name_2, R.id.widget_city_name_3)
         private val CITY_DAYS_IDS = intArrayOf(R.id.widget_city_days_1, R.id.widget_city_days_2, R.id.widget_city_days_3)
 
-        /** 打卡 / 补记 / 开机后调用，立刻刷新所有实例。 */
+        /** 打卡 / 补记后调用，后台线程刷新所有实例(应用进程存活场景)。 */
         fun updateAll(context: Context) {
+            val app = context.applicationContext
+            Thread {
+                runCatching { pushAllSync(app) }
+            }.apply { isDaemon = true }.start()
+        }
+
+        /** 同步刷新:广播接收器等短生命周期场景用(配合 goAsync,防止进程提前被杀)。 */
+        fun pushAllSync(context: Context) {
             val app = context.applicationContext
             val manager = AppWidgetManager.getInstance(app)
             val ids = manager.getAppWidgetIds(ComponentName(app, TernDaysWidgetProvider::class.java))
             if (ids.isEmpty()) return
-            Thread {
-                runCatching { push(app, manager, ids) }
-            }.start()
+            push(app, manager, ids)
         }
 
         private fun push(context: Context, manager: AppWidgetManager, ids: IntArray) {

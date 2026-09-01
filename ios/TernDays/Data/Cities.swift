@@ -4,7 +4,7 @@ import WidgetKit
 /// 内置离线城市库（bundle 里的 cities.tsv），懒加载单例。
 enum Cities {
     /// 随包城市库版本：每次重建 cities.tsv 时 +1，触发历史打卡按原始坐标重解析。
-    static let datasetVersion = 2
+    static let datasetVersion = 3
 
     private static var _matcher: CityMatcher?
     private static let lock = NSLock()
@@ -35,18 +35,17 @@ enum Cities {
         remapping = true
         lock.unlock()
         DispatchQueue.global(qos: .utility).async {
-            let m = matcher
-            let changed = DataStore.shared.remapCities { lat, lng in
-                m.nearest(lat: lat, lng: lng).map { ($0.cityKey, $0.cityName) }
-            }
+            let changed = HistoryReplay.replayAll(store: DataStore.shared, matcher: matcher)
             defaults.set(datasetVersion, forKey: key)
             lock.lock()
             remapping = false
             lock.unlock()
             if changed > 0 {
                 WidgetCenter.shared.reloadAllTimelines()
-                NotificationCenter.default.post(name: .terndaysDataChanged, object: nil)
-                DispatchQueue.main.async { onChanged(changed) }
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: .terndaysDataChanged, object: nil)
+                    onChanged(changed)
+                }
             }
         }
     }

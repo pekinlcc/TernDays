@@ -51,7 +51,11 @@ ETHNIC_TOKENS = (
 )
 AMBIG = object()
 
-CJK = lambda s: any("一" <= ch <= "鿿" for ch in s)
+def CJK(s):
+    """含汉字且不含日文假名(避免把「オオハシ上科」「アイダホ州」当中文名选中)。"""
+    has_han = any("一" <= ch <= "鿿" for ch in s)
+    has_kana = any("぀" <= ch <= "ヿ" for ch in s)
+    return has_han and not has_kana
 
 
 def strip_suffix(name: str) -> str:
@@ -117,7 +121,11 @@ def build_cn_name_index(pca: dict):
     return clean(full), clean(stem)
 
 
-DISPLAY_OVERRIDES = {"三藩市": "旧金山", "杜拜": "迪拜", "雪梨": "悉尼"}
+# 注意:查表发生在「去掉尾字『市』」之后,键要写去尾后的形式
+DISPLAY_OVERRIDES = {
+    "三藩市": "旧金山", "三藩": "旧金山", "杜拜": "迪拜", "雪梨": "悉尼",
+    "泽西": "泽西城",
+}
 
 
 def _simplified_rank(s):
@@ -173,6 +181,18 @@ EXTRA_CN_ANCHORS = [
     ("珠海", 22.055, 113.290),
     # 东莞南部（与深圳宝安接壤，防止长安/滨海湾被新增的深圳锚点吸走）
     ("东莞", 22.804, 113.807), ("东莞", 22.786, 113.746), ("东莞", 22.820, 113.860),
+    # 环北京卫星城（行政属廊坊三河/大厂/香河,此前整片被判北京)
+    ("廊坊", 39.947, 116.800), ("廊坊", 39.982, 117.078), ("廊坊", 39.886, 116.989),
+    ("廊坊", 39.761, 117.006),
+    # 北京通州侧(「通州」京/苏撞名被词典丢弃,须锚点钉住,免被燕郊锚吸走)
+    ("北京", 39.909, 116.656), ("北京", 39.936, 116.692), ("北京", 39.913, 116.752),
+    # 花桥—安亭走廊(花桥属苏州昆山;上海嘉定西缘补锚防反向误吸)
+    ("苏州", 31.257, 121.100), ("苏州", 31.310, 121.080),
+    ("上海", 31.297, 121.166), ("上海", 31.375, 121.265),
+    # 广佛界(南海东部黄岐/盐步/大沥/里水/桂城属佛山;广州侧金沙洲/滘口)
+    ("佛山", 23.104, 113.211), ("佛山", 23.099, 113.185), ("佛山", 23.115, 113.155),
+    ("佛山", 23.157, 113.194), ("佛山", 23.031, 113.147),
+    ("广州", 23.160, 113.215), ("广州", 23.093, 113.230),
 ]
 
 # 港澳一侧同样补口岸/边界锚点（GeoNames 街区点集中在市区，口岸带稀疏），
@@ -191,8 +211,12 @@ EXTRA_HKMO_ANCHORS = [
 ]
 
 
+CLUSTER_MAX_POP = 200_000  # 大城不并入他城(泽西城 29 万曾被并进纽约)
+
+
 def cluster_foreign(entries):
-    """把街区/近郊点合并进同国 15km 内、人口 >= 其 10/3 倍的最近大城。"""
+    """把街区/近郊点合并进同国同一级行政区 15km 内、人口 >= 其 10/3 倍的最近大城。
+    跨 admin1 不并(泽西城 NJ ≠ 纽约 NY),人口 >= 20 万的城市不并。"""
     entries = sorted(entries, key=lambda c: -c["population"])
     grid = {}
     for i, c in enumerate(entries):
@@ -206,6 +230,8 @@ def cluster_foreign(entries):
         return i
 
     for i, c in enumerate(entries):
+        if c["population"] >= CLUSTER_MAX_POP:
+            continue
         best, bestd = None, 1e18
         for dy in (-1, 0, 1):
             for dx in (-1, 0, 1):
@@ -213,6 +239,8 @@ def cluster_foreign(entries):
                                    round(c["longitude"] / 0.2) + dx), []):
                     o = entries[j]
                     if o["population"] < c["population"] * (10 / 3):
+                        continue
+                    if (o.get("admin1code") or "") != (c.get("admin1code") or ""):
                         continue
                     d = haversine(c["latitude"], c["longitude"], o["latitude"], o["longitude"])
                     if d <= 15 and d < bestd:
@@ -259,6 +287,9 @@ def main(out_path: str):
         elif cc == "MO":
             rows.append((lat, lng, "MO:澳门", "澳门"))
             hkmo_native.append((lat, lng, "MO:澳门", "澳门"))
+        elif cc == "SG":
+            # 城市国家整体记一城:住兀兰/裕廊/义顺都是「在新加坡」
+            rows.append((lat, lng, "SG:新加坡", "新加坡"))
         else:
             foreign.append(c)
 
@@ -317,23 +348,61 @@ def main(out_path: str):
 
     # 境外：先聚类（代々木→東京、Paris 04→Paris），再产出行
     entries, roots = cluster_foreign(foreign)
+
+    # 同 key 撞名消解：同 (cc:admin1:name) 下的不同聚类根是两座真实不同的城市
+    # （如 JP:12:Shibetsu 的标津町与士别市），次要根的 key 追加 #geonameid 区分
+    def root_key(root):
+        return f"{root['countrycode']}:{root.get('admin1code') or ''}:{root['name']}"
+
+    key_roots: dict = {}
+    for i in range(len(entries)):
+        root = entries[roots[i]]
+        key_roots.setdefault(root_key(root), {})[root["geonameid"]] = root["population"]
+    key_suffix = {}
+    dedup_keys = 0
+    for key, gids in key_roots.items():
+        if len(gids) > 1:
+            dedup_keys += 1
+            main_gid = max(gids, key=lambda g: gids[g])
+            for gid in gids:
+                if gid != main_gid:
+                    key_suffix[(key, gid)] = f"{key}#{gid}"
+
     for i, c in enumerate(entries):
         root = entries[roots[i]]
         zh = pick_cjk(root["alternatenames"])
         display = zh or root["name"]
-        key = f"{root['countrycode']}:{root.get('admin1code') or ''}:{root['name']}"
+        key = root_key(root)
+        key = key_suffix.get((key, root["geonameid"]), key)
         rows.append((c["latitude"], c["longitude"], key, display))
 
-    rows.sort(key=lambda r: (r[2], r[0], r[1]))
+    rows = sorted(set(rows), key=lambda r: (r[2], r[0], r[1]))  # set 去掉完全重复行
+
+    # 中文城市补拼音别名列(第 5 列,可选),让 beijing/shenzhen 也能搜到
+    from pypinyin import lazy_pinyin
+
+    pinyin_cache: dict = {}
+
+    def alias(key, display):
+        if not (key.startswith("CN:") or key.startswith("HK:") or key.startswith("MO:") or key.startswith("SG:")):
+            return ""
+        if display not in pinyin_cache:
+            pinyin_cache[display] = "".join(lazy_pinyin(display))
+        return pinyin_cache[display]
+
     with open(out_path, "w", encoding="utf-8") as f:
         for lat, lng, key, display in rows:
-            f.write(f"{lat:.5f}\t{lng:.5f}\t{key}\t{display}\n")
+            a = alias(key, display)
+            if a:
+                f.write(f"{lat:.5f}\t{lng:.5f}\t{key}\t{display}\t{a}\n")
+            else:
+                f.write(f"{lat:.5f}\t{lng:.5f}\t{key}\t{display}\n")
 
     prefs = {r[3] for r in rows if r[2].startswith("CN:")}
     fkeys = {r[2] for r in rows if not r[2].startswith(("CN:", "HK:", "MO:"))}
     merged = sum(1 for i, r in enumerate(roots) if r != i)
     print(f"rows={len(rows)} cn_prefectures={len(prefs)} cn_dropped={dropped} "
-          f"foreign_cities={len(fkeys)} foreign_merged={merged}")
+          f"foreign_cities={len(fkeys)} foreign_merged={merged} key_collisions_resolved={dedup_keys}")
     print(f"wrote {out_path} ({Path(out_path).stat().st_size} bytes)")
 
 

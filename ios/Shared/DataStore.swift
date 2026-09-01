@@ -32,13 +32,27 @@ final class DataStore {
             dir = legacy
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
-        if let d = try? Data(contentsOf: punchesURL),
-           let list = try? JSONDecoder().decode([Punch].self, from: d) {
-            punches = list
+        punches = Self.loadList(punchesURL) ?? []
+        overrides = Self.loadList(overridesURL) ?? []
+    }
+
+    /// 读档。解码失败时把损坏文件改名保留(.corrupt),绝不让后续 persist 静默清空全部历史。
+    private static func loadList<T: Decodable>(_ url: URL) -> [T]? {
+        guard let d = try? Data(contentsOf: url) else { return nil }
+        if let list = try? JSONDecoder().decode([T].self, from: d) {
+            return list
         }
-        if let d = try? Data(contentsOf: overridesURL),
-           let list = try? JSONDecoder().decode([DayOverride].self, from: d) {
-            overrides = list
+        let backup = url.deletingPathExtension()
+            .appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970)).json")
+        try? FileManager.default.moveItem(at: url, to: backup)
+        return nil
+    }
+
+    /// 小组件进程可能长期复用:每次生成时间线前重读磁盘,避免展示过期数据。
+    func reloadFromDisk() {
+        queue.sync {
+            punches = Self.loadList(punchesURL) ?? punches
+            overrides = Self.loadList(overridesURL) ?? overrides
         }
     }
 
@@ -81,32 +95,36 @@ final class DataStore {
         queue.sync { !punches.isEmpty }
     }
 
-    /// 最近一次成功解析的打卡（按打卡时间），供城市判定的行程连续性交叉验证。
-    func latestResolvedPunch() -> Punch? {
+    /// 行程连续性锚点:最近一条**非改判**(viaContext != true)且解析成功的打卡。
+    /// 被连续性/误差圈粘住的点不作锚,36h 上限才能真正限制整条粘滞链。
+    func latestAnchorPunch() -> Punch? {
         queue.sync {
-            punches.filter { $0.cityKey != "unknown" }.max { $0.epochMs < $1.epochMs }
+            punches.filter { $0.cityKey != "unknown" && $0.viaContext != true }
+                .max { $0.epochMs < $1.epochMs }
         }
     }
 
-    /// 用当前城市库按原始坐标重解析全部打卡（城市库升级后修正历史误判）。
-    /// 手动更正（overrides）不受影响。@return 实际改动的记录数。
-    func remapCities(_ mapper: (Double, Double) -> (key: String, name: String)?) -> Int {
+    func overrideFor(date: LocalDate) -> DayOverride? {
+        queue.sync { overrides.first { $0.localDate == date } }
+    }
+
+    /// 历史重放的结果落盘:按 (日期, 时段) 定位并替换城市与改判标记。@return 城市被改动的条数。
+    func applyResolveOutcomes(_ outcomes: [(date: LocalDate, slot: Slot, key: String, name: String, via: Bool)]) -> Int {
         queue.sync {
             var changed = 0
-            for i in punches.indices {
-                guard let (key, name) = mapper(punches[i].lat, punches[i].lng) else { continue }
-                if key != punches[i].cityKey || name != punches[i].cityName {
-                    let p = punches[i]
-                    punches[i] = Punch(
-                        localDate: p.localDate, slot: p.slot, epochMs: p.epochMs, zoneId: p.zoneId,
-                        lat: p.lat, lng: p.lng, accuracyM: p.accuracyM,
-                        cityKey: key, cityName: name,
-                        delayed: p.delayed, fromCache: p.fromCache
-                    )
-                    changed += 1
-                }
+            for o in outcomes {
+                guard let i = punches.firstIndex(where: { $0.localDate == o.date && $0.slot == o.slot }) else { continue }
+                var p = punches[i]
+                if p.cityKey != o.key || p.cityName != o.name { changed += 1 }
+                p = Punch(
+                    localDate: p.localDate, slot: p.slot, epochMs: p.epochMs, zoneId: p.zoneId,
+                    lat: p.lat, lng: p.lng, accuracyM: p.accuracyM,
+                    cityKey: o.key, cityName: o.name,
+                    delayed: p.delayed, fromCache: p.fromCache, viaContext: o.via
+                )
+                punches[i] = p
             }
-            if changed > 0 { persist() }
+            persist()
             return changed
         }
     }

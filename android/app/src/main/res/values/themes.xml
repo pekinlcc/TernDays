@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <style name="Theme.TernDays" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">#FFF4F6F8</item>
-        <item name="android:statusBarColor">#FFF4F6F8</item>
+        <item name="android:windowBackground">@color/td_window_bg</item>
+        <item name="android:statusBarColor">@color/td_window_bg</item>
         <item name="android:windowLightStatusBar">true</item>
-        <item name="android:navigationBarColor">#FFF4F6F8</item>
+        <item name="android:navigationBarColor">@color/td_window_bg</item>
+        <!-- 配色由应用自绘,禁止 OEM 强制反色把界面搞花 -->
+        <item name="android:forceDarkAllowed" tools:targetApi="q">false</item>
     </style>
 </resources>

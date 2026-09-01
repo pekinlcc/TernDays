@@ -8,6 +8,8 @@ struct OnboardingView: View {
 
     @ObservedObject private var punch = PunchManager.shared
     @State private var notifAsked = false
+    // 「始终允许」的系统升级弹窗一辈子只出现一次:请求过之后按钮改跳系统设置,不做死按钮
+    @State private var alwaysAsked = false
 
     private enum Step {
         case whenInUse, always, notify, done
@@ -77,13 +79,21 @@ struct OnboardingView: View {
                 Button {
                     advance()
                 } label: {
-                    Text(step.button)
+                    Text(step == .always && alwaysAsked ? "去系统设置改为「始终」" : step.button)
                         .font(.system(size: 15, weight: .semibold)).foregroundColor(.white)
                         .frame(maxWidth: .infinity).frame(height: 52)
                         .background(RoundedRectangle(cornerRadius: 14).fill(Td.accent))
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 24)
+
+                if step == .always && alwaysAsked {
+                    Text("系统不再重复弹窗:请在 设置 → TernDays → 位置 中选择「始终」")
+                        .font(.system(size: 12)).foregroundColor(Td.muted)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                        .padding(.top, 8)
+                }
 
                 Button("稍后再说") { onDone() }
                     .font(.system(size: 14)).foregroundColor(Td.muted)
@@ -110,7 +120,14 @@ struct OnboardingView: View {
                 punch.requestWhenInUse()
             }
         case .always:
-            punch.requestAlways()
+            if alwaysAsked {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            } else {
+                alwaysAsked = true
+                punch.requestAlways()
+            }
         case .notify:
             UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in
                 DispatchQueue.main.async { notifAsked = true }

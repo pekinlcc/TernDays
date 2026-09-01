@@ -6,6 +6,8 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -59,7 +62,8 @@ fun ExportScreen(initialYear: Int, onBack: () -> Unit) {
     var useXlsx by rememberSaveable { mutableStateOf(true) }
     var incSummary by rememberSaveable { mutableStateOf(true) }
     var incDaily by rememberSaveable { mutableStateOf(true) }
-    var busy by rememberSaveable { mutableStateOf(false) }
+    // 不能用 rememberSaveable:旋转屏幕会把「正在生成」状态复活,按钮永久卡死
+    var busy by remember { mutableStateOf(false) }
 
     val data by produceState<YearData?>(initialValue = null, year) {
         value = loadYearData(context, year)
@@ -80,7 +84,11 @@ fun ExportScreen(initialYear: Int, onBack: () -> Unit) {
         LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.weight(1f)) {
             item { SectionLabel("导出范围") }
             item {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                // 年份多了要能横向滚动,不然早期年份点不到
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     (data?.years ?: listOf(year)).forEach { y ->
                         val selected = y == year
                         Row(

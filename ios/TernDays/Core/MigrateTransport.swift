@@ -251,15 +251,14 @@ enum MigrateImportClient {
                         done.append(Data(bytes: &countBE, count: 4))
                         conn.send(content: done, completion: .contentProcessed { _ in conn.cancel() })
 
-                        // 导入的记录可能来自不同版本的城市库:按本机库重解析(幂等)
+                        // 导入的记录可能来自不同版本的城市库:按时间重放交叉验证重解析(幂等)
                         var remapped = 0
                         if result.punchesAdded > 0 {
-                            let m = Cities.matcher
-                            remapped = DataStore.shared.remapCities { lat, lng in
-                                m.nearest(lat: lat, lng: lng).map { ($0.cityKey, $0.cityName) }
-                            }
+                            remapped = HistoryReplay.replayAll(store: DataStore.shared, matcher: Cities.matcher)
                             WidgetCenter.shared.reloadAllTimelines()
-                            NotificationCenter.default.post(name: .terndaysDataChanged, object: nil)
+                            DispatchQueue.main.async {
+                                NotificationCenter.default.post(name: .terndaysDataChanged, object: nil)
+                            }
                         }
                         DispatchQueue.main.async { onDone(Outcome(result: result, remapped: remapped)) }
                     } catch {

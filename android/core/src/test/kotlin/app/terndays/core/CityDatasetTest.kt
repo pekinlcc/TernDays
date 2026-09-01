@@ -26,13 +26,25 @@ class CityDatasetTest {
             if (line.isEmpty()) return@forEachLine
             lines++
             val f = line.split('\t')
-            assertEquals(4, f.size, "字段数异常: $line")
+            assertTrue(f.size in 4..5, "字段数异常: $line")
             val lat = f[0].toDouble()
             val lng = f[1].toDouble()
             assertTrue(lat in -90.0..90.0 && lng in -180.0..180.0, "坐标越界: $line")
             assertTrue(f[2].isNotBlank() && f[3].isNotBlank(), "空字段: $line")
         }
         assertEquals(lines, matcher.size, "解析行数与文件行数不一致")
+    }
+
+    /** 同一 cityKey 的所有行 display 必须一致(曾有 8 组 key 被两座不同城市共用)。 */
+    @Test
+    fun `同 key 无歧义`() {
+        val names = HashMap<String, String>()
+        file.forEachLine { line ->
+            if (line.isEmpty()) return@forEachLine
+            val f = line.split('\t')
+            val prev = names.put(f[2], f[3])
+            assertTrue(prev == null || prev == f[3], "key ${f[2]} 有两个名字: $prev / ${f[3]}")
+        }
     }
 
     @Test
@@ -84,6 +96,28 @@ class CityDatasetTest {
             Triple(22.1300, 113.5450, "珠海"),  // 横琴东岸
             Triple(22.2130, 113.5490, "澳门"),  // 关闸
             Triple(22.1460, 113.5590, "澳门"),  // 路氹城
+        )
+        for ((lat, lng, expected) in cases) {
+            val m = matcher.nearest(lat, lng)!!
+            assertEquals(expected, m.cityName, "($lat, $lng) -> ${m.cityName}，期望 $expected")
+        }
+    }
+
+    /** 环核心城市卫星城(v0.6.1):此前整片被判给相邻核心城市。 */
+    @Test
+    fun `卫星城按行政归属判定`() {
+        val cases = listOf(
+            Triple(39.947, 116.800, "廊坊"),   // 燕郊
+            Triple(39.886, 116.989, "廊坊"),   // 大厂
+            Triple(39.909, 116.656, "北京"),   // 通州(京/苏撞名曾被词典丢弃)
+            Triple(31.257, 121.100, "苏州"),   // 花桥
+            Triple(31.297, 121.166, "上海"),   // 安亭
+            Triple(23.104, 113.211, "佛山"),   // 黄岐
+            Triple(23.157, 113.194, "佛山"),   // 里水
+            Triple(23.160, 113.215, "广州"),   // 金沙洲
+            Triple(1.437, 103.786, "新加坡"),  // 兀兰(城市国家整体一城)
+            Triple(37.775, -122.419, "旧金山"),
+            Triple(40.728, -74.078, "泽西城"), // 曾被并进纽约
         )
         for ((lat, lng, expected) in cases) {
             val m = matcher.nearest(lat, lng)!!

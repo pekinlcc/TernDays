@@ -1,6 +1,7 @@
 package app.terndays.android.migrate
 
 import android.content.Context
+import app.terndays.android.DataBus
 import app.terndays.android.db.PunchDb
 import app.terndays.android.geo.Cities
 import app.terndays.android.widget.TernDaysWidgetProvider
@@ -76,12 +77,12 @@ object MigrateClient {
                 }
                 runCatching { sock.close() }
 
-                // 导入的记录可能来自不同版本的城市库:按本机库重解析(幂等,只改不一致项)
+                // 导入的记录可能来自不同版本的城市库:按时间重放交叉验证重解析(幂等)
                 var remapped = 0
                 if (result.punchesAdded > 0) {
-                    val m = Cities.get(context)
-                    remapped = db.remapCities { lat, lng -> m.nearest(lat, lng)?.let { it.cityKey to it.cityName } }
+                    remapped = db.replayResolveAll(Cities.get(context))
                     TernDaysWidgetProvider.updateAll(context)
+                    DataBus.bump()
                 }
                 onDone(Outcome(result, remapped))
             } catch (e: Exception) {
