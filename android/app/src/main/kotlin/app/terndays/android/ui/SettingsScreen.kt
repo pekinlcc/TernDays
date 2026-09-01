@@ -211,12 +211,31 @@ fun SettingsScreen(onBack: () -> Unit) {
                 )
             }
             item {
+                val versionName = remember {
+                    runCatching {
+                        @Suppress("DEPRECATION")
+                        context.packageManager.getPackageInfo(context.packageName, 0).versionName
+                    }.getOrNull() ?: "?"
+                }
                 TdCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        AboutLine("版本", "0.1")
+                        AboutLine("版本", "TernDays $versionName")
                         AboutLine("打卡时间", "每天 07:00 / 17:00（本地时间，暂不可调）")
                         AboutLine("数据", "全部保存在本机，无账号、不上传；删除应用即清除")
                         AboutLine("城市库", "GeoNames（CC-BY 4.0）+ 中国行政区划（modood），离线匹配")
+                        AboutLine(
+                            "开源地址", "github.com/pekinlcc/TernDays",
+                            onClick = {
+                                runCatching {
+                                    context.startActivity(
+                                        android.content.Intent(
+                                            android.content.Intent.ACTION_VIEW,
+                                            android.net.Uri.parse("https://github.com/pekinlcc/TernDays"),
+                                        ),
+                                    )
+                                }
+                            },
+                        )
                     }
                 }
             }
@@ -268,10 +287,13 @@ private fun Tag(text: String, bg: Color, fg: Color) {
 }
 
 @Composable
-private fun AboutLine(label: String, value: String) {
-    Row {
+private fun AboutLine(label: String, value: String, onClick: (() -> Unit)? = null) {
+    Row(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier) {
         Text(label, fontSize = 12.sp, color = Td.Faint, modifier = Modifier.width(64.dp))
-        Text(value, fontSize = 12.sp, color = Td.Muted, lineHeight = 18.sp)
+        Text(
+            value, fontSize = 12.sp, lineHeight = 18.sp,
+            color = if (onClick != null) Td.AccentDeep else Td.Muted,
+        )
     }
 }
 

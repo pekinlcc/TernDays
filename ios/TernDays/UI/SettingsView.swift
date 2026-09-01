@@ -12,6 +12,10 @@ struct SettingsView: View {
 
     private var year: Int { LocalDate.today().year }
 
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
@@ -82,10 +86,17 @@ struct SettingsView: View {
                     .padding(.leading, 2).padding(.top, 4)
                 TdCard {
                     VStack(alignment: .leading, spacing: 8) {
-                        aboutLine("版本", "0.1")
+                        aboutLine("版本", "TernDays \(appVersion)")
                         aboutLine("打卡机制", "iOS 无法后台精确定时：位置变化唤醒 + 定时提醒 + 打开补打")
                         aboutLine("数据", "全部保存在本机，无账号、不上传；删除应用即清除")
                         aboutLine("城市库", "GeoNames（CC-BY 4.0）+ 中国行政区划（modood），离线匹配")
+                        HStack(alignment: .top) {
+                            Text("开源地址").font(.system(size: 12)).foregroundColor(Td.faint)
+                                .frame(width: 64, alignment: .leading)
+                            Link("github.com/pekinlcc/TernDays",
+                                 destination: URL(string: "https://github.com/pekinlcc/TernDays")!)
+                                .font(.system(size: 12)).foregroundColor(Td.accentDeep)
+                        }
                     }
                     .padding(16)
                 }
