@@ -3,12 +3,33 @@ import SwiftUI
 struct HomeView: View {
     @State private var year = LocalDate.today().year
     @State private var data: YearData?
+    @ObservedObject private var punch = PunchManager.shared
 
     private var today: LocalDate { LocalDate.today() }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 14) {
+                if punch.authStatus != .authorizedAlways {
+                    NavigationLink(value: "settings") {
+                        HStack(spacing: 10) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.system(size: 15)).foregroundColor(Td.warmDeep)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("自动打卡还没就绪")
+                                    .font(.system(size: 13, weight: .semibold)).foregroundColor(Td.warmDeep)
+                                Text("定位权限未设为「始终允许」，点击去完成设置")
+                                    .font(.system(size: 11)).foregroundColor(Td.warmDeep)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12)).foregroundColor(Td.warmDeep)
+                        }
+                        .padding(.horizontal, 14).padding(.vertical, 12)
+                        .background(RoundedRectangle(cornerRadius: 14).fill(Td.warmSoft))
+                    }
+                    .buttonStyle(.plain)
+                }
                 summaryCard
                 if year == today.year { todayCard }
                 HStack {

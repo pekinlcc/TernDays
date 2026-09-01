@@ -95,10 +95,14 @@ fun HomeScreen(
         Spacer(Modifier.height(14.dp))
 
         val d = data
+        val permsOk = remember(tick) { app.terndays.android.util.Perms.allCoreGranted(context) }
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(14.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
+            if (!permsOk) {
+                item { PermissionWarningCard(onSettings) }
+            }
             item { SummaryCard(year, d, onYearChange = { year = it }, onSettings) }
             if (year == LocalDate.now().year) {
                 item { TodayCard(d) }
@@ -119,6 +123,26 @@ fun HomeScreen(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun PermissionWarningCard(onSettings: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Td.WarmSoft)
+            .clickable(onClick = onSettings)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(painterResource(R.drawable.ic_pin), null, Modifier.size(18.dp), tint = Td.WarmDeep)
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("自动打卡还没就绪", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Td.WarmDeep)
+            Text("定位权限未设为「始终允许」，点击去完成设置", fontSize = 11.sp, color = Td.WarmDeep)
+        }
+        Icon(painterResource(R.drawable.ic_chev_right), null, Modifier.size(14.dp), tint = Td.WarmDeep)
     }
 }
 

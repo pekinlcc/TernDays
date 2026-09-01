@@ -66,6 +66,17 @@ class ExporterTest {
     }
 
     @Test
+    fun `落盘样例文件供外部工具校验`() {
+        val dir = java.io.File("build/sample-exports").apply { mkdirs() }
+        val xlsx = java.io.File(dir, "sample.xlsx")
+        xlsx.writeBytes(Exporter.exportXlsx(stats, punches, includeSummary = true, includeDaily = true))
+        val csv = java.io.File(dir, "sample.csv")
+        csv.writeText(Exporter.exportCsv(stats, punches, includeSummary = true, includeDaily = true))
+        assertTrue(xlsx.length() > 800)
+        assertTrue(csv.length() > 200)
+    }
+
+    @Test
     fun `csv 转义`() {
         val tricky = listOf(
             Punch(

@@ -60,9 +60,8 @@ fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
             attr.shares.firstOrNull { it.cityKey == cityKey }?.let { date to CityDay(it.weight, attr.manual) }
         }?.toMap() ?: emptyMap()
     }
-    val cityName = d?.stats?.cities?.firstOrNull { it.cityKey == cityKey }?.cityName
-        ?: cityDays.keys.firstOrNull()?.toString() ?: ""
     val stat = d?.stats?.cities?.firstOrNull { it.cityKey == cityKey }
+    val cityName = stat?.cityName ?: ""
 
     var month by remember { mutableIntStateOf(0) }
     LaunchedEffect(d) {
