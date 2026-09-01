@@ -16,26 +16,44 @@ object DayCounting {
     private fun localTime(p: Punch) =
         java.time.Instant.ofEpochMilli(p.epochMs).atZone(java.time.ZoneId.of(p.zoneId)).toLocalTime()
 
+    /** 半天样本:来自打卡、首点兜底,或半天手动更正。 */
+    private data class Sample(val cityKey: String, val cityName: String)
+
+    private fun Punch.sample() = Sample(cityKey, cityName)
+
     fun attributeDay(
         date: LocalDate,
         morning: Punch?,
         evening: Punch?,
         extra: Punch?,
         override: DayOverride?,
+    ): DayAttribution = attributeDay(date, morning, evening, extra, listOfNotNull(override))
+
+    fun attributeDay(
+        date: LocalDate,
+        morning: Punch?,
+        evening: Punch?,
+        extra: Punch?,
+        overrides: List<DayOverride>,
     ): DayAttribution {
-        if (override != null) {
-            return DayAttribution(date, listOf(CityShare(override.cityKey, override.cityName, 1.0)), manual = true)
+        val full = overrides.firstOrNull { it.scope == OverrideScope.FULL }
+        if (full != null) {
+            return DayAttribution(date, listOf(CityShare(full.cityKey, full.cityName, 1.0)), manual = true)
         }
-        val m = morning ?: extra?.takeIf { PunchRules.isMorningHalf(localTime(it)) }
-        val e = evening ?: extra?.takeIf { !PunchRules.isMorningHalf(localTime(it)) }
-        return attributeSamples(date, m, e)
+        val mo = overrides.firstOrNull { it.scope == OverrideScope.MORNING }
+        val eo = overrides.firstOrNull { it.scope == OverrideScope.EVENING }
+        val m = mo?.let { Sample(it.cityKey, it.cityName) }
+            ?: (morning ?: extra?.takeIf { PunchRules.isMorningHalf(localTime(it)) })?.sample()
+        val e = eo?.let { Sample(it.cityKey, it.cityName) }
+            ?: (evening ?: extra?.takeIf { !PunchRules.isMorningHalf(localTime(it)) })?.sample()
+        return attributeSamples(date, m, e, manual = mo != null || eo != null)
     }
 
-    private fun attributeSamples(date: LocalDate, morning: Punch?, evening: Punch?): DayAttribution {
+    private fun attributeSamples(date: LocalDate, morning: Sample?, evening: Sample?, manual: Boolean): DayAttribution {
         return when {
             morning != null && evening != null ->
                 if (morning.cityKey == evening.cityKey) {
-                    DayAttribution(date, listOf(CityShare(morning.cityKey, morning.cityName, 1.0)))
+                    DayAttribution(date, listOf(CityShare(morning.cityKey, morning.cityName, 1.0)), manual)
                 } else {
                     DayAttribution(
                         date,
@@ -43,10 +61,11 @@ object DayCounting {
                             CityShare(morning.cityKey, morning.cityName, 0.5),
                             CityShare(evening.cityKey, evening.cityName, 0.5),
                         ),
+                        manual,
                     )
                 }
-            morning != null -> DayAttribution(date, listOf(CityShare(morning.cityKey, morning.cityName, 1.0)))
-            evening != null -> DayAttribution(date, listOf(CityShare(evening.cityKey, evening.cityName, 1.0)))
+            morning != null -> DayAttribution(date, listOf(CityShare(morning.cityKey, morning.cityName, 1.0)), manual)
+            evening != null -> DayAttribution(date, listOf(CityShare(evening.cityKey, evening.cityName, 1.0)), manual)
             else -> DayAttribution(date, emptyList())
         }
     }
@@ -75,13 +94,13 @@ object DayCounting {
             val cur = bySlot[k]
             if (cur == null || p.epochMs < cur.epochMs) bySlot[k] = p
         }
-        val overrideByDate = overrides.filter { it.localDate.year == year }.associateBy { it.localDate }
+        val overridesByDate = overrides.filter { it.localDate.year == year }.groupBy { it.localDate }
 
         // 「无记录」从当年首条记录之日起算:安装/开始使用之前的日子不是「漏记」,
         // 不再让新装用户首页一上来就显示「另有 240+ 天无记录」
         val firstRecordDate = minOf(
             bySlot.keys.minOfOrNull { it.first } ?: LocalDate.MAX,
-            overrideByDate.keys.minOrNull() ?: LocalDate.MAX,
+            overridesByDate.keys.minOrNull() ?: LocalDate.MAX,
         )
 
         val days = LinkedHashMap<LocalDate, DayAttribution>()
@@ -94,7 +113,7 @@ object DayCounting {
                 bySlot[d to Slot.MORNING],
                 bySlot[d to Slot.EVENING],
                 bySlot[d to Slot.EXTRA],
-                overrideByDate[d],
+                overridesByDate[d] ?: emptyList(),
             )
             days[d] = attr
             if (attr.shares.isEmpty()) {

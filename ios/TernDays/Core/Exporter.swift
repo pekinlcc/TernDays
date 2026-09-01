@@ -7,6 +7,7 @@ enum Exporter {
         let date: LocalDate
         let morning: Punch?
         let evening: Punch?
+        let extra: Punch?
         let attribution: DayAttribution
     }
 
@@ -22,6 +23,7 @@ enum Exporter {
                 date: date,
                 morning: bySlot["\(date)|\(Slot.morning.rawValue)"],
                 evening: bySlot["\(date)|\(Slot.evening.rawValue)"],
+                extra: bySlot["\(date)|\(Slot.extra.rawValue)"],
                 attribution: stats.days[date]!
             )
         }
@@ -30,7 +32,7 @@ enum Exporter {
     private static func attributionText(_ attr: DayAttribution) -> String {
         if attr.shares.isEmpty { return "无记录" }
         let body = attr.shares.map { $0.cityName + ($0.weight >= 1.0 ? " +1" : " +0.5") }.joined(separator: " / ")
-        return body + (attr.manual ? "（补记）" : "")
+        return body + (attr.manual ? "（手动）" : "")
     }
 
     private static func summaryTable(_ stats: YearStats) -> [[String]] {
@@ -43,13 +45,15 @@ enum Exporter {
     }
 
     private static func dailyTable(_ stats: YearStats, _ punches: [Punch]) -> [[String]] {
-        var rows: [[String]] = [["日期", "星期", "早打卡", "早城市", "晚打卡", "晚城市", "计入", "备注"]]
+        var rows: [[String]] = [["日期", "星期", "早打卡", "早城市", "晚打卡", "晚城市", "首点", "计入", "备注"]]
         for r in dailyRows(stats: stats, punches: punches) {
             var notes: [String] = []
-            if r.attribution.manual { notes.append("手动补记") }
+            if r.attribution.manual { notes.append("手动更正/补记") }
             if r.morning?.delayed == true { notes.append("早点延迟") }
             if r.evening?.delayed == true { notes.append("晚点延迟") }
-            if r.morning?.fromCache == true || r.evening?.fromCache == true { notes.append("用了缓存位置") }
+            if r.morning?.fromCache == true || r.evening?.fromCache == true || r.extra?.fromCache == true {
+                notes.append("用了缓存位置")
+            }
             rows.append([
                 r.date.description,
                 r.date.weekdayCn,
@@ -57,6 +61,7 @@ enum Exporter {
                 r.morning?.cityName ?? "",
                 r.evening?.clock ?? "",
                 r.evening?.cityName ?? "",
+                r.extra.map { "首 \($0.clock) \($0.cityName)" } ?? "",
                 attributionText(r.attribution),
                 notes.joined(separator: "；"),
             ])

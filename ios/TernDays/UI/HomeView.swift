@@ -72,13 +72,15 @@ struct HomeView: View {
         .task(id: year) { reload() }
         .onReceive(NotificationCenter.default.publisher(for: .terndaysDataChanged)) { _ in reload() }
         .sheet(isPresented: $correctingToday) {
+            let todayPunches = data?.punches.filter { $0.localDate == today } ?? []
             CityCorrectSheet(
                 date: today,
                 currentCityName: data?.stats.days[today]?.shares.map(\.cityName).joined(separator: " + "),
                 recentCities: data?.stats.cities.map { ($0.cityKey, $0.cityName) } ?? [],
                 hasOverride: data?.overrides.contains { $0.localDate == today } ?? false,
-                onPick: { key, name in
-                    DataStore.shared.setOverride(DayOverride(localDate: today, cityKey: key, cityName: name))
+                hasBothHalves: todayPunches.contains { $0.slot == .morning } && todayPunches.contains { $0.slot == .evening },
+                onPick: { key, name, scope in
+                    DataStore.shared.setOverride(DayOverride(localDate: today, cityKey: key, cityName: name, scope: scope))
                     WidgetCenter.shared.reloadAllTimelines()
                     correctingToday = false
                     reload()
@@ -128,8 +130,12 @@ struct HomeView: View {
                     bigStat(value: data.map { String($0.stats.cities.count) } ?? "–", label: "个城市")
                     Spacer()
                     if let missing = data?.stats.unrecordedDates.count, missing > 0 {
-                        Text("另有 \(missing) 天无记录")
-                            .font(.system(size: 11)).foregroundColor(Td.faint)
+                        // 可点:跳设置去补记(与 Android 一致)
+                        NavigationLink(value: "settings") {
+                            Text("另有 \(missing) 天可补记")
+                                .font(.system(size: 11, weight: .medium)).foregroundColor(Td.accentDeep)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -226,7 +232,7 @@ struct HomeView: View {
                                 Text("天").font(.system(size: 11)).foregroundColor(Td.faint)
                             }
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 13, weight: .semibold)).foregroundColor(Color(hex: 0xC3CCD4))
+                                .font(.system(size: 13, weight: .semibold)).foregroundColor(Td.chevron)
                         }
                         .padding(.vertical, 14)
                         .contentShape(Rectangle())

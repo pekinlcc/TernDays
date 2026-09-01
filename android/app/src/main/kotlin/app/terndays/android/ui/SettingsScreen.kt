@@ -109,7 +109,7 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
     Column(Modifier.fillMaxSize().background(Td.Bg).statusBarsPadding().padding(horizontal = 20.dp)) {
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconSquare(R.drawable.ic_chev_left) { onBack() }
+            IconSquare(R.drawable.ic_chev_left, "返回") { onBack() }
             Text(
                 "设置", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Td.Ink,
                 modifier = Modifier.weight(1f), textAlign = TextAlign.Center,
@@ -201,7 +201,7 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
                                     fontSize = 12.sp, color = Td.Muted,
                                 )
                             }
-                            Icon(painterResource(R.drawable.ic_chev_right), null, Modifier.size(16.dp), tint = Color(0xFFC3CCD4))
+                            Icon(painterResource(R.drawable.ic_chev_right), null, Modifier.size(16.dp), tint = Td.Chevron)
                         }
                         HorizontalDivider(color = Td.Divider, thickness = 1.dp)
                         Text(
@@ -389,7 +389,7 @@ private fun MigrateRow(title: String, sub: String, onClick: () -> Unit) {
             Text(sub, fontSize = 12.sp, color = Td.Muted, lineHeight = 17.sp)
         }
         Spacer(Modifier.width(10.dp))
-        Icon(painterResource(R.drawable.ic_chev_right), null, Modifier.size(16.dp), tint = Color(0xFFC3CCD4))
+        Icon(painterResource(R.drawable.ic_chev_right), null, Modifier.size(16.dp), tint = Td.Chevron)
     }
 }
 
@@ -442,11 +442,11 @@ private fun BackfillDialog(
     val context = LocalContext.current
     var pickedDate by remember { mutableStateOf<LocalDate?>(null) }
     var query by remember { mutableStateOf("") }
-    val results by produceState(initialValue = emptyList<Pair<String, String>>(), query) {
+    val results by produceState(initialValue = emptyList<app.terndays.core.CityMatcher.SearchHit>(), query) {
         value = if (query.isBlank()) {
             emptyList()
         } else {
-            withContext(Dispatchers.IO) { Cities.get(context).searchByName(query, 12) }
+            withContext(Dispatchers.IO) { Cities.get(context).search(query, 12) }
         }
     }
 
@@ -476,22 +476,38 @@ private fun BackfillDialog(
                     )
                     OutlinedTextField(
                         value = query, onValueChange = { query = it },
-                        placeholder = { Text("搜索城市名", fontSize = 13.sp) },
+                        placeholder = { Text("搜索城市名（支持拼音）", fontSize = 13.sp) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
-                    val options = if (query.isBlank()) recentCities else results
                     if (query.isBlank() && recentCities.isNotEmpty()) {
                         Text("常去城市", fontSize = 11.sp, color = Td.Faint)
                     }
                     LazyColumn(Modifier.heightIn(max = 260.dp)) {
-                        items(options) { (key, name) ->
-                            Text(
-                                name, fontSize = 14.sp, color = Td.Ink,
-                                modifier = Modifier.fillMaxWidth()
-                                    .clickable { onConfirm(date, key, name) }
-                                    .padding(vertical = 10.dp),
-                            )
+                        if (query.isBlank()) {
+                            items(recentCities) { (key, name) ->
+                                Text(
+                                    name, fontSize = 14.sp, color = Td.Ink,
+                                    modifier = Modifier.fillMaxWidth()
+                                        .clickable { onConfirm(date, key, name) }
+                                        .padding(vertical = 10.dp),
+                                )
+                            }
+                        } else {
+                            items(results) { hit ->
+                                Row(
+                                    Modifier.fillMaxWidth()
+                                        .clickable { onConfirm(date, hit.cityKey, hit.cityName) }
+                                        .padding(vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(hit.cityName, fontSize = 14.sp, color = Td.Ink)
+                                    if (hit.region.isNotEmpty()) {
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(hit.region, fontSize = 12.sp, color = Td.Faint)
+                                    }
+                                }
+                            }
                         }
                     }
                 }

@@ -14,12 +14,14 @@ struct MigrationPayload: Codable {
 
 enum MigrationCodec {
     static let appName = "TernDays"
-    static let format = 1
+    /// v2 新增 override.scope(半天更正)。仅当数据里真有半天更正才标 2,老版本仍可接收全天数据。
+    static let format = 2
 
     static func toJson(datasetVersion: Int, exportedAtMs: Int64, punches: [Punch], overrides: [DayOverride]) throws -> Data {
-        try JSONEncoder().encode(
+        let needsV2 = overrides.contains { $0.scope != .full }
+        return try JSONEncoder().encode(
             MigrationPayload(
-                app: appName, format: format, datasetVersion: datasetVersion,
+                app: appName, format: needsV2 ? 2 : 1, datasetVersion: datasetVersion,
                 exportedAtMs: exportedAtMs, punches: punches, overrides: overrides
             )
         )

@@ -30,6 +30,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import app.terndays.android.geo.Cities
+import app.terndays.core.CityMatcher
+import app.terndays.core.OverrideScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
@@ -43,17 +45,20 @@ fun CityCorrectDialog(
     date: LocalDate,
     currentCityName: String?,
     recentCities: List<Pair<String, String>>,
+    /** 该日是否有早/晚两个半天样本:只有跨城日才值得提供半天选择 */
+    hasBothHalves: Boolean = false,
     onDismiss: () -> Unit,
-    onPick: (String, String) -> Unit,
+    onPick: (String, String, OverrideScope) -> Unit,
     onRestoreAuto: (() -> Unit)?,
 ) {
     val context = LocalContext.current
     var query by remember { mutableStateOf("") }
-    val results by produceState(initialValue = emptyList<Pair<String, String>>(), query) {
+    var scope by remember { mutableStateOf(OverrideScope.FULL) }
+    val results by produceState(initialValue = emptyList<CityMatcher.SearchHit>(), query) {
         value = if (query.isBlank()) {
             emptyList()
         } else {
-            withContext(Dispatchers.IO) { Cities.get(context).searchByName(query, 12) }
+            withContext(Dispatchers.IO) { Cities.get(context).search(query, 12) }
         }
     }
 
@@ -64,32 +69,55 @@ fun CityCorrectDialog(
                     "更正 ${date.monthValue}月${date.dayOfMonth}日 的城市",
                     fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Td.Ink,
                 )
-                if (currentCityName != null) {
-                    Text(
-                        "当前判定：$currentCityName。选正确的城市后，这一天将按所选城市记全天。",
-                        fontSize = 12.sp, color = Td.Muted, lineHeight = 18.sp,
-                    )
-                } else {
-                    Text("这一天还没有记录，选择城市后按全天补记。", fontSize = 12.sp, color = Td.Muted)
+                val hint = when {
+                    currentCityName == null -> "这一天还没有记录，选择城市后按全天补记。"
+                    scope == OverrideScope.FULL -> "当前判定：$currentCityName。选正确的城市后，这一天将按所选城市记全天。"
+                    scope == OverrideScope.MORNING -> "只改上半天（早上那次）：下半天仍按打卡判定，跨城日可保留各半天。"
+                    else -> "只改下半天（傍晚那次）：上半天仍按打卡判定，跨城日可保留各半天。"
+                }
+                Text(hint, fontSize = 12.sp, color = Td.Muted, lineHeight = 18.sp)
+
+                if (hasBothHalves) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ScopeChip("整天", scope == OverrideScope.FULL) { scope = OverrideScope.FULL }
+                        ScopeChip("只改上半天", scope == OverrideScope.MORNING) { scope = OverrideScope.MORNING }
+                        ScopeChip("只改下半天", scope == OverrideScope.EVENING) { scope = OverrideScope.EVENING }
+                    }
                 }
                 OutlinedTextField(
                     value = query, onValueChange = { query = it },
-                    placeholder = { Text("搜索城市名", fontSize = 13.sp) },
+                    placeholder = { Text("搜索城市名（支持拼音）", fontSize = 13.sp) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
-                val options = if (query.isBlank()) recentCities else results
                 if (query.isBlank() && recentCities.isNotEmpty()) {
                     Text("常去城市", fontSize = 11.sp, color = Td.Faint)
                 }
                 LazyColumn(Modifier.heightIn(max = 260.dp)) {
-                    items(options) { (key, name) ->
-                        Text(
-                            name, fontSize = 14.sp, color = Td.Ink,
-                            modifier = Modifier.fillMaxWidth()
-                                .clickable { onPick(key, name) }
-                                .padding(vertical = 10.dp),
-                        )
+                    if (query.isBlank()) {
+                        items(recentCities) { (key, name) ->
+                            Text(
+                                name, fontSize = 14.sp, color = Td.Ink,
+                                modifier = Modifier.fillMaxWidth()
+                                    .clickable { onPick(key, name, scope) }
+                                    .padding(vertical = 10.dp),
+                            )
+                        }
+                    } else {
+                        items(results) { hit ->
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .clickable { onPick(hit.cityKey, hit.cityName, scope) }
+                                    .padding(vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(hit.cityName, fontSize = 14.sp, color = Td.Ink)
+                                if (hit.region.isNotEmpty()) {
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(hit.region, fontSize = 12.sp, color = Td.Faint)
+                                }
+                            }
+                        }
                     }
                 }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -109,4 +137,19 @@ fun CityCorrectDialog(
             }
         }
     }
+}
+
+@Composable
+private fun ScopeChip(text: String, selected: Boolean, onClick: () -> Unit) {
+    Text(
+        text,
+        fontSize = 12.sp,
+        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        color = if (selected) Td.OnAccent else Td.Muted,
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (selected) Td.Accent else Td.Bg)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    )
 }

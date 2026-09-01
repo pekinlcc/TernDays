@@ -104,8 +104,9 @@ final class DataStore {
         }
     }
 
+    /// 该日的整天更正(锚点参照只认整天更正)。
     func overrideFor(date: LocalDate) -> DayOverride? {
-        queue.sync { overrides.first { $0.localDate == date } }
+        queue.sync { overrides.first { $0.localDate == date && $0.scope == .full } }
     }
 
     /// 历史重放的结果落盘:按 (日期, 时段) 定位并替换城市与改判标记。@return 城市被改动的条数。
@@ -137,14 +138,20 @@ final class DataStore {
         queue.sync { overrides.filter { $0.localDate.year == year } }
     }
 
+    /// 写入手动更正。整天与半天互斥:写整天清掉该日半天,写半天清掉该日整天。
     func setOverride(_ o: DayOverride) {
         queue.sync {
-            overrides.removeAll { $0.localDate == o.localDate }
+            if o.scope == .full {
+                overrides.removeAll { $0.localDate == o.localDate }
+            } else {
+                overrides.removeAll { $0.localDate == o.localDate && ($0.scope == .full || $0.scope == o.scope) }
+            }
             overrides.append(o)
             persist()
         }
     }
 
+    /// 恢复整天自动判定:删除该日全部手动更正。
     func removeOverride(date: LocalDate) {
         queue.sync {
             overrides.removeAll { $0.localDate == date }
@@ -180,7 +187,7 @@ final class DataStore {
                 }
             }
             for o in newOverrides {
-                if overrides.contains(where: { $0.localDate == o.localDate }) {
+                if overrides.contains(where: { $0.localDate == o.localDate && $0.scope == o.scope }) {
                     oSkipped += 1
                 } else {
                     overrides.append(o)

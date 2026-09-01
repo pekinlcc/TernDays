@@ -6,6 +6,7 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
@@ -41,6 +42,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -72,7 +74,7 @@ fun ExportScreen(initialYear: Int, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().background(Td.Bg).statusBarsPadding().padding(horizontal = 20.dp)) {
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconSquare(R.drawable.ic_chev_left) { onBack() }
+            IconSquare(R.drawable.ic_chev_left, "返回") { onBack() }
             Text(
                 "导出数据", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Td.Ink,
                 modifier = Modifier.weight(1f), textAlign = TextAlign.Center,
@@ -174,11 +176,11 @@ fun ExportScreen(initialYear: Int, onBack: () -> Unit) {
                 contentAlignment = Alignment.Center,
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(painterResource(R.drawable.ic_share), null, Modifier.size(18.dp), tint = Color.White)
+                    Icon(painterResource(R.drawable.ic_share), null, Modifier.size(18.dp), tint = Td.OnAccent)
                     Spacer(Modifier.width(8.dp))
                     Text(
                         if (busy) "正在生成…" else "生成文件并分享",
-                        fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Color.White,
+                        fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Td.OnAccent,
                     )
                 }
             }
@@ -222,7 +224,7 @@ private fun FormatCard(title: String, sub: String, selected: Boolean, modifier: 
                 Modifier.align(Alignment.TopEnd).size(18.dp).clip(RoundedCornerShape(9.dp)).background(Td.Accent),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(painterResource(R.drawable.ic_check), null, Modifier.size(11.dp), tint = Color.White)
+                Icon(painterResource(R.drawable.ic_check), null, Modifier.size(11.dp), tint = Td.OnAccent)
             }
         }
     }
@@ -231,7 +233,9 @@ private fun FormatCard(title: String, sub: String, selected: Boolean, modifier: 
 @Composable
 private fun CheckRow(title: String, sub: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(vertical = 13.dp),
+        Modifier.fillMaxWidth()
+            .toggleable(value = checked, role = Role.Checkbox, onValueChange = onChange)
+            .padding(vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -240,7 +244,7 @@ private fun CheckRow(title: String, sub: String, checked: Boolean, onChange: (Bo
                 .border(if (checked) 0.dp else 1.5.dp, if (checked) Td.Accent else Td.Border, RoundedCornerShape(6.dp)),
             contentAlignment = Alignment.Center,
         ) {
-            if (checked) Icon(painterResource(R.drawable.ic_check), null, Modifier.size(12.dp), tint = Color.White)
+            if (checked) Icon(painterResource(R.drawable.ic_check), null, Modifier.size(12.dp), tint = Td.OnAccent)
         }
         Spacer(Modifier.width(12.dp))
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {

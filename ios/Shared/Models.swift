@@ -122,10 +122,35 @@ struct Punch: Codable, Identifiable {
     }
 }
 
+/// 手动更正的作用范围:整天,或只改上/下半天样本。
+enum OverrideScope: String, Codable {
+    case full = "FULL"
+    case morning = "MORNING"
+    case evening = "EVENING"
+}
+
+/// 手动补记/更正。full = 整天;morning/evening = 只替换对应半天样本
+/// (跨城出行日可只改错的那半天,保住 0.5+0.5 的拆分)。
+/// scope 为 Optional 以兼容旧版存档(缺键即 full)。
 struct DayOverride: Codable {
     let localDate: LocalDate
     let cityKey: String
     let cityName: String
+    var scopeRaw: OverrideScope? = .full
+
+    var scope: OverrideScope { scopeRaw ?? .full }
+
+    enum CodingKeys: String, CodingKey {
+        case localDate, cityKey, cityName
+        case scopeRaw = "scope"
+    }
+
+    init(localDate: LocalDate, cityKey: String, cityName: String, scope: OverrideScope = .full) {
+        self.localDate = localDate
+        self.cityKey = cityKey
+        self.cityName = cityName
+        self.scopeRaw = scope
+    }
 }
 
 struct CityShare: Equatable {

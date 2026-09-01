@@ -80,7 +80,7 @@ struct OnboardingView: View {
                     advance()
                 } label: {
                     Text(step == .always && alwaysAsked ? "去系统设置改为「始终」" : step.button)
-                        .font(.system(size: 15, weight: .semibold)).foregroundColor(.white)
+                        .font(.system(size: 15, weight: .semibold)).foregroundColor(Td.onAccent)
                         .frame(maxWidth: .infinity).frame(height: 52)
                         .background(RoundedRectangle(cornerRadius: 14).fill(Td.accent))
                 }

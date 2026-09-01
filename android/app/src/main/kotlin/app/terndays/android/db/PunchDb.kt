@@ -8,13 +8,14 @@ import android.database.sqlite.SQLiteOpenHelper
 import app.terndays.core.CityMatcher
 import app.terndays.core.DayOverride
 import app.terndays.core.HistoryReplay
+import app.terndays.core.OverrideScope
 import app.terndays.core.Punch
 import app.terndays.core.Slot
 import java.time.LocalDate
 
 /** 本地 SQLite 存储：打卡记录 + 手动补记。同一 (日期, 时段) 只保留最早插入的一条。 */
 class PunchDb private constructor(context: Context) :
-    SQLiteOpenHelper(context.applicationContext, "terndays.db", null, 2) {
+    SQLiteOpenHelper(context.applicationContext, "terndays.db", null, 3) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -37,9 +38,11 @@ class PunchDb private constructor(context: Context) :
         )
         db.execSQL(
             """CREATE TABLE day_override(
-                local_date TEXT PRIMARY KEY,
+                local_date TEXT NOT NULL,
+                scope TEXT NOT NULL DEFAULT 'FULL',
                 city_key TEXT NOT NULL,
-                city_name TEXT NOT NULL
+                city_name TEXT NOT NULL,
+                PRIMARY KEY(local_date, scope)
             )""",
         )
     }
@@ -47,6 +50,24 @@ class PunchDb private constructor(context: Context) :
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
             db.execSQL("ALTER TABLE punch ADD COLUMN via_context INTEGER NOT NULL DEFAULT 0")
+        }
+        if (oldVersion < 3) {
+            // day_override 升级为 (日期, 范围) 复合主键,旧数据全部视为整天更正
+            db.execSQL("ALTER TABLE day_override RENAME TO day_override_v2")
+            db.execSQL(
+                """CREATE TABLE day_override(
+                    local_date TEXT NOT NULL,
+                    scope TEXT NOT NULL DEFAULT 'FULL',
+                    city_key TEXT NOT NULL,
+                    city_name TEXT NOT NULL,
+                    PRIMARY KEY(local_date, scope)
+                )""",
+            )
+            db.execSQL(
+                "INSERT INTO day_override(local_date, scope, city_key, city_name) " +
+                    "SELECT local_date, 'FULL', city_key, city_name FROM day_override_v2",
+            )
+            db.execSQL("DROP TABLE day_override_v2")
         }
     }
 
@@ -112,13 +133,21 @@ class PunchDb private constructor(context: Context) :
         queryPunches("WHERE city_key != 'unknown' AND via_context = 0 ORDER BY epoch_ms DESC LIMIT 1", null)
             .firstOrNull()
 
+    /** 该日的整天更正(锚点参照只认整天更正;半天更正不整体改写当日城市)。 */
     fun overrideFor(date: LocalDate): DayOverride? =
         readableDatabase.rawQuery(
-            "SELECT local_date, city_key, city_name FROM day_override WHERE local_date=?",
+            "SELECT local_date, city_key, city_name, scope FROM day_override WHERE local_date=? AND scope='FULL'",
             arrayOf(date.toString()),
         ).use { c ->
-            if (c.moveToNext()) DayOverride(LocalDate.parse(c.getString(0)), c.getString(1), c.getString(2)) else null
+            if (c.moveToNext()) readOverride(c) else null
         }
+
+    private fun readOverride(c: Cursor) = DayOverride(
+        localDate = LocalDate.parse(c.getString(0)),
+        cityKey = c.getString(1),
+        cityName = c.getString(2),
+        scope = OverrideScope.valueOf(c.getString(3)),
+    )
 
     fun punchesForYear(year: Int): List<Punch> =
         queryPunches("WHERE local_date LIKE ? ORDER BY local_date, slot", arrayOf("$year-%"))
@@ -126,11 +155,9 @@ class PunchDb private constructor(context: Context) :
     fun allPunches(): List<Punch> = queryPunches("ORDER BY local_date, slot", null)
 
     fun allOverrides(): List<DayOverride> =
-        readableDatabase.rawQuery("SELECT local_date, city_key, city_name FROM day_override", null).use { c ->
+        readableDatabase.rawQuery("SELECT local_date, city_key, city_name, scope FROM day_override", null).use { c ->
             val out = ArrayList<DayOverride>(c.count)
-            while (c.moveToNext()) {
-                out.add(DayOverride(LocalDate.parse(c.getString(0)), c.getString(1), c.getString(2)))
-            }
+            while (c.moveToNext()) out.add(readOverride(c))
             out
         }
 
@@ -161,7 +188,7 @@ class PunchDb private constructor(context: Context) :
             out
         }
         if (items.isEmpty()) return 0
-        val overrides = allOverrides().associate { it.localDate to it.cityKey }
+        val overrides = allOverrides().filter { it.scope == OverrideScope.FULL }.associate { it.localDate to it.cityKey }
         val outcomes = HistoryReplay.replay(matcher, items, overrides)
 
         val db = writableDatabase
@@ -224,27 +251,45 @@ class PunchDb private constructor(context: Context) :
 
     fun overridesForYear(year: Int): List<DayOverride> =
         readableDatabase.rawQuery(
-            "SELECT local_date, city_key, city_name FROM day_override WHERE local_date LIKE ?",
+            "SELECT local_date, city_key, city_name, scope FROM day_override WHERE local_date LIKE ?",
             arrayOf("$year-%"),
         ).use { c ->
             val out = ArrayList<DayOverride>(c.count)
-            while (c.moveToNext()) {
-                out.add(DayOverride(LocalDate.parse(c.getString(0)), c.getString(1), c.getString(2)))
-            }
+            while (c.moveToNext()) out.add(readOverride(c))
             out
         }
 
     fun setOverride(o: DayOverride) {
-        val values = ContentValues().apply {
-            put("local_date", o.localDate.toString())
-            put("city_key", o.cityKey)
-            put("city_name", o.cityName)
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            // 整天与半天更正互斥:写整天时清掉半天,写半天时清掉整天
+            if (o.scope == OverrideScope.FULL) {
+                db.delete("day_override", "local_date=?", arrayOf(o.localDate.toString()))
+            } else {
+                db.delete("day_override", "local_date=? AND scope='FULL'", arrayOf(o.localDate.toString()))
+            }
+            val values = ContentValues().apply {
+                put("local_date", o.localDate.toString())
+                put("scope", o.scope.name)
+                put("city_key", o.cityKey)
+                put("city_name", o.cityName)
+            }
+            db.insertWithOnConflict("day_override", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
         }
-        writableDatabase.insertWithOnConflict("day_override", null, values, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
+    /** 恢复整天自动判定:删除该日全部手动更正。 */
     fun removeOverride(date: LocalDate) {
         writableDatabase.delete("day_override", "local_date=?", arrayOf(date.toString()))
+    }
+
+    /** 删除单条(某日某范围)的手动更正。 */
+    fun removeOverride(date: LocalDate, scope: OverrideScope) {
+        writableDatabase.delete("day_override", "local_date=? AND scope=?", arrayOf(date.toString(), scope.name))
     }
 
     /** 有数据的年份（含当前年），降序。 */

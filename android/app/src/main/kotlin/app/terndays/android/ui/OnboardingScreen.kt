@@ -189,7 +189,7 @@ fun OnboardingScreen(onDone: () -> Unit) {
         ) {
             Text(
                 if (step in deniedSteps) "去系统设置开启" else step.button,
-                fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Color.White,
+                fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Td.OnAccent,
             )
         }
         if (step in deniedSteps) {

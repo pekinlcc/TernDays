@@ -69,13 +69,15 @@ struct CityDetailView: View {
             }
         }
         .sheet(item: $correcting) { target in
+            let dayPunches = (data?.punches ?? []).filter { $0.localDate == target.date }
             CityCorrectSheet(
                 date: target.date,
                 currentCityName: data?.stats.days[target.date]?.shares.map(\.cityName).joined(separator: " + "),
                 recentCities: data?.stats.cities.map { ($0.cityKey, $0.cityName) } ?? [],
                 hasOverride: data?.overrides.contains { $0.localDate == target.date } ?? false,
-                onPick: { key, name in
-                    DataStore.shared.setOverride(DayOverride(localDate: target.date, cityKey: key, cityName: name))
+                hasBothHalves: dayPunches.contains { $0.slot == .morning } && dayPunches.contains { $0.slot == .evening },
+                onPick: { key, name, scope in
+                    DataStore.shared.setOverride(DayOverride(localDate: target.date, cityKey: key, cityName: name, scope: scope))
                     afterCorrection()
                 },
                 onRestoreAuto: {
@@ -218,11 +220,11 @@ struct CityDetailView: View {
                         }
                         Spacer()
                         if day.manual {
-                            TagView(text: "补记", bg: Td.warmSoft, fg: Td.warmDeep)
+                            TagView(text: "手动", bg: Td.warmSoft, fg: Td.warmDeep)
                         } else if day.weight >= 1.0 {
                             TagView(text: "全天", bg: Td.accentSoft, fg: Td.accentDeep)
                         } else {
-                            TagView(text: "半天", bg: Td.warmSoft, fg: Td.warmDeep)
+                            TagView(text: "半天", bg: Td.accentSoft, fg: Td.accentDeep)
                         }
                     }
                     .padding(.vertical, 11)
@@ -235,12 +237,12 @@ struct CityDetailView: View {
     }
 
     private func subText(day: CityDay, m: Punch?, e: Punch?, x: Punch?) -> String {
-        if day.manual { return "手动补记" }
         var parts: [(Int64, String)] = []
         if let m { parts.append((m.epochMs, "早 \(m.clock) \(m.cityName)")) }
         if let e { parts.append((e.epochMs, "晚 \(e.clock) \(e.cityName)")) }
         if let x { parts.append((x.epochMs, "首 \(x.clock) \(x.cityName)")) }
-        if parts.isEmpty { return "无打卡记录" }
-        return parts.sorted { $0.0 < $1.0 }.map(\.1).joined(separator: " · ")
+        let detail = parts.sorted { $0.0 < $1.0 }.map(\.1).joined(separator: " · ")
+        if day.manual { return detail.isEmpty ? "手动补记" : "已手动更正 · 当天打卡:" + detail }
+        return detail.isEmpty ? "无打卡记录" : detail
     }
 }

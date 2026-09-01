@@ -61,7 +61,7 @@ struct SettingsView: View {
                                 }
                                 Spacer()
                                 Image(systemName: "chevron.right")
-                                    .font(.system(size: 13)).foregroundColor(Color(hex: 0xC3CCD4))
+                                    .font(.system(size: 13)).foregroundColor(Td.chevron)
                             }
                             .padding(.vertical, 14)
                             .contentShape(Rectangle())
@@ -136,6 +136,7 @@ struct SettingsView: View {
         .navigationTitle("设置")
         .navigationBarTitleDisplayMode(.inline)
         .task { reload() }
+        .onReceive(NotificationCenter.default.publisher(for: .terndaysDataChanged)) { _ in reload() }
         .sheet(isPresented: $scanOpen) {
             MigrateScanView { code in
                 scanOpen = false
@@ -246,7 +247,7 @@ struct SettingsView: View {
             }
             Spacer()
             Image(systemName: "chevron.right")
-                .font(.system(size: 13)).foregroundColor(Color(hex: 0xC3CCD4))
+                .font(.system(size: 13)).foregroundColor(Td.chevron)
         }
         .padding(.vertical, 12)
         .contentShape(Rectangle())
@@ -268,19 +269,32 @@ struct BackfillSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var pickedDate: LocalDate?
     @State private var query = ""
+    @State private var hits: [CityMatcher.SearchHit] = []
 
     var body: some View {
         NavigationStack {
             List {
                 if let date = pickedDate {
                     Section("补记 \(date.month)月\(date.day)日 在哪个城市？") {
-                        TextField("搜索城市名", text: $query)
-                        let options = query.isEmpty
-                            ? recentCities
-                            : Cities.matcher.search(name: query, limit: 12).map { ($0.key, $0.name) }
-                        ForEach(options, id: \.0) { key, name in
-                            Button(name) { onConfirm(date, key, name) }
-                                .foregroundColor(Td.ink)
+                        TextField("搜索城市名（支持拼音）", text: $query)
+                        if query.isEmpty {
+                            ForEach(recentCities, id: \.0) { key, name in
+                                Button(name) { onConfirm(date, key, name) }
+                                    .foregroundColor(Td.ink)
+                            }
+                        } else {
+                            ForEach(hits, id: \.cityKey) { hit in
+                                Button {
+                                    onConfirm(date, hit.cityKey, hit.cityName)
+                                } label: {
+                                    HStack {
+                                        Text(hit.cityName).foregroundColor(Td.ink)
+                                        if !hit.region.isEmpty {
+                                            Text(hit.region).font(.system(size: 12)).foregroundColor(Td.faint)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 } else {
@@ -294,6 +308,14 @@ struct BackfillSheet: View {
                         }
                     }
                 }
+            }
+            .task(id: query) {
+                let q = query
+                guard !q.isEmpty else { hits = []; return }
+                let found = await Task.detached(priority: .userInitiated) {
+                    Cities.matcher.searchHits(q, limit: 12)
+                }.value
+                if q == query { hits = found }
             }
             .navigationTitle("手动补记")
             .navigationBarTitleDisplayMode(.inline)

@@ -70,7 +70,7 @@ fun MigrateSendScreen(onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().background(Td.Bg).statusBarsPadding().padding(horizontal = 20.dp)) {
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconSquare(R.drawable.ic_chev_left) { onBack() }
+            IconSquare(R.drawable.ic_chev_left, "返回") { onBack() }
             Text(
                 "迁移到新手机", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Td.Ink,
                 modifier = Modifier.weight(1f), textAlign = TextAlign.Center,

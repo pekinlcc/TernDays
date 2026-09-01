@@ -36,6 +36,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -89,14 +92,14 @@ fun HomeScreen(
                 Modifier.size(32.dp).clip(RoundedCornerShape(9.dp)).background(Td.Accent),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(painterResource(R.drawable.ic_tern), null, Modifier.size(22.dp), tint = Color.White)
+                Icon(painterResource(R.drawable.ic_tern), null, Modifier.size(22.dp), tint = Td.OnAccent)
             }
             Spacer(Modifier.width(10.dp))
             Text("TernDays", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = Td.Ink)
             Spacer(Modifier.weight(1f))
-            IconSquare(R.drawable.ic_share) { onExport(year) }
+            IconSquare(R.drawable.ic_share, "导出数据") { onExport(year) }
             Spacer(Modifier.width(8.dp))
-            IconSquare(R.drawable.ic_sliders) { onSettings() }
+            IconSquare(R.drawable.ic_sliders, "设置") { onSettings() }
         }
         Spacer(Modifier.height(14.dp))
 
@@ -134,13 +137,15 @@ fun HomeScreen(
     if (correctingToday) {
         val today = LocalDate.now()
         val current = data?.stats?.days?.get(today)
+        val todayPunches = data?.punches?.filter { it.localDate == today } ?: emptyList()
         CityCorrectDialog(
             date = today,
             currentCityName = current?.shares?.joinToString(" + ") { it.cityName },
             recentCities = data?.stats?.cities?.map { it.cityKey to it.cityName } ?: emptyList(),
+            hasBothHalves = todayPunches.any { it.slot == Slot.MORNING } && todayPunches.any { it.slot == Slot.EVENING },
             onDismiss = { correctingToday = false },
-            onPick = { key, name ->
-                PunchDb.get(context).setOverride(DayOverride(today, key, name))
+            onPick = { key, name, scope ->
+                PunchDb.get(context).setOverride(DayOverride(today, key, name, scope))
                 TernDaysWidgetProvider.updateAll(context)
                 correctingToday = false
                 tick++
@@ -180,12 +185,23 @@ private fun PermissionWarningCard(onSettings: () -> Unit) {
 }
 
 @Composable
-internal fun IconSquare(iconRes: Int, tint: Color = Color(0xFF40515F), onClick: () -> Unit) {
+internal fun IconSquare(
+    iconRes: Int,
+    contentDescription: String,
+    tint: Color = Td.Muted,
+    onClick: () -> Unit,
+) {
+    // 触摸目标 48dp(可视方块仍是 36dp),满足无障碍最小尺寸
     Box(
-        Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(Td.Surface).clickable(onClick = onClick),
+        Modifier.size(48.dp).clickable(onClick = onClick).semantics { role = Role.Button },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(painterResource(iconRes), null, Modifier.size(19.dp), tint = tint)
+        Box(
+            Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(Td.Surface),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(painterResource(iconRes), contentDescription, Modifier.size(19.dp), tint = tint)
+        }
     }
 }
 
@@ -224,10 +240,13 @@ private fun SummaryCard(year: Int, data: YearData?, onYearChange: (Int) -> Unit,
                 Spacer(Modifier.weight(1f))
                 val missing = data?.stats?.unrecordedDates?.size ?: 0
                 if (missing > 0) {
+                    // 可点:跳设置去补记(样式上明确可点,不再是灰色死文字)
                     Text(
-                        "另有 $missing 天无记录",
-                        fontSize = 11.sp, color = Td.Faint,
-                        modifier = Modifier.clickable(onClick = onSettings),
+                        "另有 $missing 天可补记",
+                        fontSize = 11.sp, fontWeight = FontWeight.Medium, color = Td.AccentDeep,
+                        modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                            .clickable(onClick = onSettings)
+                            .padding(horizontal = 6.dp, vertical = 3.dp),
                     )
                 }
             }
@@ -344,7 +363,7 @@ private fun CityListCard(data: YearData?, onOpenCity: (String) -> Unit) {
                         Text("天", fontSize = 11.sp, color = Td.Faint, modifier = Modifier.padding(bottom = 3.dp))
                     }
                     Spacer(Modifier.width(10.dp))
-                    Icon(painterResource(R.drawable.ic_chev_right), null, Modifier.size(16.dp), tint = Color(0xFFC3CCD4))
+                    Icon(painterResource(R.drawable.ic_chev_right), null, Modifier.size(16.dp), tint = Td.Chevron)
                 }
             }
         }

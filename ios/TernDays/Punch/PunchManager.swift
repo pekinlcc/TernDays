@@ -87,6 +87,9 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
             } else if let cached = self.lm.location,
                       Date().timeIntervalSince(cached.timestamp) < 6 * 3600 {
                 self.record(slot: slot, location: cached, fromCache: true)
+            } else {
+                // 完全拿不到位置:提醒用户打开应用补打(对齐 Android 的失败通知)
+                self.notifyPunchFailed(slot: slot)
             }
             completion?()
         }
@@ -165,6 +168,18 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
         if !pendingLocationCallbacks.isEmpty {
             flushLocationCallbacks(nil)
         }
+    }
+
+    /// 打卡失败提醒:打开应用会自动补打,也可手动补记
+    private func notifyPunchFailed(slot: Slot) {
+        let label = slot == .morning ? "早上 7 点" : (slot == .evening ? "下午 5 点" : "首次")
+        let content = UNMutableNotificationContent()
+        content.title = "\(label)打卡没成功"
+        content.body = "没拿到定位。打开 TernDays 会自动补打,也可在设置中手动补记。"
+        content.sound = .default
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "punch-failed", content: content, trigger: nil)
+        )
     }
 
     // MARK: 本地通知（07:00 / 17:00 提醒）

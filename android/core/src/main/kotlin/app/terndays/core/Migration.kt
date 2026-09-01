@@ -17,7 +17,8 @@ import javax.crypto.spec.SecretKeySpec
  */
 object MigrationCodec {
     const val APP = "TernDays"
-    const val FORMAT = 1
+    /** v2 新增 override.scope(半天更正)。仅当数据里真的有半天更正才标 2,老版本仍可接收全天数据。 */
+    const val FORMAT = 2
 
     data class Payload(
         val formatVersion: Int,
@@ -30,7 +31,8 @@ object MigrationCodec {
     fun toJson(datasetVersion: Int, exportedAtMs: Long, punches: List<Punch>, overrides: List<DayOverride>): String {
         val root = JSONObject()
         root.put("app", APP)
-        root.put("format", FORMAT)
+        val needsV2 = overrides.any { it.scope != OverrideScope.FULL }
+        root.put("format", if (needsV2) 2 else 1)
         root.put("datasetVersion", datasetVersion)
         root.put("exportedAtMs", exportedAtMs)
         val pArr = JSONArray()
@@ -57,6 +59,7 @@ object MigrationCodec {
             o.put("localDate", ov.localDate.toString())
             o.put("cityKey", ov.cityKey)
             o.put("cityName", ov.cityName)
+            if (ov.scope != OverrideScope.FULL) o.put("scope", ov.scope.name)
             oArr.put(o)
         }
         root.put("overrides", oArr)
@@ -109,6 +112,7 @@ object MigrationCodec {
                         localDate = LocalDate.parse(o.getString("localDate")),
                         cityKey = o.getString("cityKey"),
                         cityName = o.getString("cityName"),
+                        scope = OverrideScope.valueOf(o.optString("scope", "FULL")),
                     ),
                 )
             } catch (e: Exception) {

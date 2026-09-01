@@ -89,7 +89,7 @@ fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().background(Td.Bg).statusBarsPadding().padding(horizontal = 20.dp)) {
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconSquare(R.drawable.ic_chev_left) { onBack() }
+            IconSquare(R.drawable.ic_chev_left, "返回") { onBack() }
             Text(
                 cityName, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Td.Ink,
                 modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -141,13 +141,15 @@ fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
     val target = correcting
     if (target != null) {
         val current = d?.stats?.days?.get(target)
+        val dayPunches = punchesByDate[target] ?: emptyList()
         CityCorrectDialog(
             date = target,
             currentCityName = current?.shares?.joinToString(" + ") { it.cityName },
             recentCities = d?.stats?.cities?.map { it.cityKey to it.cityName } ?: emptyList(),
+            hasBothHalves = dayPunches.any { it.slot == Slot.MORNING } && dayPunches.any { it.slot == Slot.EVENING },
             onDismiss = { correcting = null },
-            onPick = { key, name ->
-                PunchDb.get(context).setOverride(DayOverride(target, key, name))
+            onPick = { key, name, scope ->
+                PunchDb.get(context).setOverride(DayOverride(target, key, name, scope))
                 TernDaysWidgetProvider.updateAll(context)
                 correcting = null
                 tick++
@@ -182,17 +184,27 @@ private fun CalendarCard(
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
-                    Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(Td.Bg).clickable(onClick = onPrev),
+                    Modifier.size(48.dp).clickable(onClick = onPrev),
                     contentAlignment = Alignment.Center,
-                ) { Icon(painterResource(R.drawable.ic_chev_left), null, Modifier.size(16.dp), tint = Td.Ink) }
+                ) {
+                    Box(
+                        Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(Td.Bg),
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(painterResource(R.drawable.ic_chev_left), "上个月", Modifier.size(16.dp), tint = Td.Ink) }
+                }
                 Text(
                     "$year 年 $month 月", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Td.Ink,
                     modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 )
                 Box(
-                    Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(Td.Bg).clickable(onClick = onNext),
+                    Modifier.size(48.dp).clickable(onClick = onNext),
                     contentAlignment = Alignment.Center,
-                ) { Icon(painterResource(R.drawable.ic_chev_right), null, Modifier.size(16.dp), tint = Td.Ink) }
+                ) {
+                    Box(
+                        Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(Td.Bg),
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(painterResource(R.drawable.ic_chev_right), "下个月", Modifier.size(16.dp), tint = Td.Ink) }
+                }
             }
             Row {
                 for (w in listOf("一", "二", "三", "四", "五", "六", "日")) {
