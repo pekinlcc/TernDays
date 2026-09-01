@@ -9,7 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
-/** 设计稿配色（design/*.dc.html） */
+/** 设计稿配色（见 design 目录的 .dc.html） */
 object Td {
     val Ink = Color(0xFF1F2B38)
     val Muted = Color(0xFF6B7A89)
