@@ -5,6 +5,12 @@ import Foundation
 /// 首点（extra）只在对应半天样本缺失时兜底（<12 点顶早点，≥12 点顶晚点）。
 enum DayCounting {
 
+    /// 半天样本:来自打卡、首点兜底,或半天手动更正
+    private struct Sample {
+        let cityKey: String
+        let cityName: String
+    }
+
     static func attributeDay(
         date: LocalDate,
         morning: Punch?,
@@ -12,28 +18,49 @@ enum DayCounting {
         extra: Punch?,
         override o: DayOverride?
     ) -> DayAttribution {
-        if let o {
-            return DayAttribution(date: date, shares: [CityShare(cityKey: o.cityKey, cityName: o.cityName, weight: 1.0)], manual: true)
-        }
-        let m = morning ?? extra.flatMap { $0.localHour < 12 ? $0 : nil }
-        let e = evening ?? extra.flatMap { $0.localHour >= 12 ? $0 : nil }
-        return attributeSamples(date: date, morning: m, evening: e)
+        attributeDay(date: date, morning: morning, evening: evening, extra: extra,
+                     overrides: o.map { [$0] } ?? [])
     }
 
-    private static func attributeSamples(date: LocalDate, morning: Punch?, evening: Punch?) -> DayAttribution {
+    static func attributeDay(
+        date: LocalDate,
+        morning: Punch?,
+        evening: Punch?,
+        extra: Punch?,
+        overrides: [DayOverride]
+    ) -> DayAttribution {
+        if let full = overrides.first(where: { $0.scope == .full }) {
+            return DayAttribution(
+                date: date,
+                shares: [CityShare(cityKey: full.cityKey, cityName: full.cityName, weight: 1.0)],
+                manual: true
+            )
+        }
+        let mo = overrides.first { $0.scope == .morning }
+        let eo = overrides.first { $0.scope == .evening }
+        let mPunch = morning ?? extra.flatMap { $0.localHour < 12 ? $0 : nil }
+        let ePunch = evening ?? extra.flatMap { $0.localHour >= 12 ? $0 : nil }
+        let m = mo.map { Sample(cityKey: $0.cityKey, cityName: $0.cityName) }
+            ?? mPunch.map { Sample(cityKey: $0.cityKey, cityName: $0.cityName) }
+        let e = eo.map { Sample(cityKey: $0.cityKey, cityName: $0.cityName) }
+            ?? ePunch.map { Sample(cityKey: $0.cityKey, cityName: $0.cityName) }
+        return attributeSamples(date: date, morning: m, evening: e, manual: mo != nil || eo != nil)
+    }
+
+    private static func attributeSamples(date: LocalDate, morning: Sample?, evening: Sample?, manual: Bool) -> DayAttribution {
         switch (morning, evening) {
         case let (m?, e?):
             if m.cityKey == e.cityKey {
-                return DayAttribution(date: date, shares: [CityShare(cityKey: m.cityKey, cityName: m.cityName, weight: 1.0)])
+                return DayAttribution(date: date, shares: [CityShare(cityKey: m.cityKey, cityName: m.cityName, weight: 1.0)], manual: manual)
             }
             return DayAttribution(date: date, shares: [
                 CityShare(cityKey: m.cityKey, cityName: m.cityName, weight: 0.5),
                 CityShare(cityKey: e.cityKey, cityName: e.cityName, weight: 0.5),
-            ])
+            ], manual: manual)
         case let (m?, nil):
-            return DayAttribution(date: date, shares: [CityShare(cityKey: m.cityKey, cityName: m.cityName, weight: 1.0)])
+            return DayAttribution(date: date, shares: [CityShare(cityKey: m.cityKey, cityName: m.cityName, weight: 1.0)], manual: manual)
         case let (nil, e?):
-            return DayAttribution(date: date, shares: [CityShare(cityKey: e.cityKey, cityName: e.cityName, weight: 1.0)])
+            return DayAttribution(date: date, shares: [CityShare(cityKey: e.cityKey, cityName: e.cityName, weight: 1.0)], manual: manual)
         default:
             return DayAttribution(date: date, shares: [])
         }
@@ -60,9 +87,12 @@ enum DayCounting {
             if let cur = bySlot[k], cur.epochMs <= p.epochMs { continue }
             bySlot[k] = p
         }
-        let overrideByDate = Dictionary(
-            overrides.filter { $0.localDate.year == year }.map { ($0.localDate, $0) },
-            uniquingKeysWith: { a, _ in a }
+        let overridesByDate = Dictionary(grouping: overrides.filter { $0.localDate.year == year }) { $0.localDate }
+
+        // 「无记录」从当年首条记录之日起算:开始使用之前的日子不是漏记
+        let firstRecordDate = min(
+            bySlot.values.map(\.localDate).min() ?? LocalDate(year: 9999, month: 12, day: 31),
+            overridesByDate.keys.min() ?? LocalDate(year: 9999, month: 12, day: 31)
         )
 
         var days: [LocalDate: DayAttribution] = [:]
@@ -75,10 +105,14 @@ enum DayCounting {
                 morning: bySlot["\(d)|\(Slot.morning.rawValue)"],
                 evening: bySlot["\(d)|\(Slot.evening.rawValue)"],
                 extra: bySlot["\(d)|\(Slot.extra.rawValue)"],
-                override: overrideByDate[d]
+                overrides: overridesByDate[d] ?? []
             )
             days[d] = attr
-            if attr.shares.isEmpty { unrecorded.append(d) } else { recorded += 1 }
+            if attr.shares.isEmpty {
+                if d >= firstRecordDate { unrecorded.append(d) }
+            } else {
+                recorded += 1
+            }
             if d == last { break }
             d = d.next()
         }

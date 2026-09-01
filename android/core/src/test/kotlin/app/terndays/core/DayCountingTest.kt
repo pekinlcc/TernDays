@@ -109,13 +109,52 @@ class DayCountingTest {
 
     @Test
     fun `跨年与未来日期边界`() {
+        // 全年零记录:开始使用之前的日子不算「漏记」,无记录列表为空
         val stats = DayCounting.computeYearStats(2025, LocalDate.parse("2026-09-01"), emptyList(), emptyList())
         assertEquals(LocalDate.parse("2025-12-31"), stats.lastDate)
-        assertEquals(365, stats.unrecordedDates.size)
+        assertTrue(stats.unrecordedDates.isEmpty())
 
         val empty = DayCounting.computeYearStats(2027, LocalDate.parse("2026-09-01"), emptyList(), emptyList())
         assertEquals(0, empty.recordedDays)
         assertTrue(empty.days.isEmpty())
+    }
+
+    @Test
+    fun `无记录从首条记录之日起算`() {
+        val p = punch("2026-03-10", Slot.MORNING, "杭州")
+        val stats = DayCounting.computeYearStats(2026, LocalDate.parse("2026-03-13"), listOf(p), emptyList())
+        // 1/1–3/9 不算漏记;3/11、3/12、3/13 算
+        assertEquals(listOf("2026-03-11", "2026-03-12", "2026-03-13").map(LocalDate::parse), stats.unrecordedDates)
+        // 手动补记更早日期后,起算点前移
+        val o = DayOverride(LocalDate.parse("2026-03-08"), "CN:杭州", "杭州")
+        val stats2 = DayCounting.computeYearStats(2026, LocalDate.parse("2026-03-13"), listOf(p), listOf(o))
+        assertEquals(LocalDate.parse("2026-03-09"), stats2.unrecordedDates.first())
+    }
+
+    @Test
+    fun `半天更正只替换对应样本`() {
+        val d = LocalDate.parse("2026-08-25")
+        val m = punch("2026-08-25", Slot.MORNING, "深圳")
+        val e = punch("2026-08-25", Slot.EVENING, "香港")
+        // 晚点被误判成香港,只更正下半天 → 深圳全天 1 天
+        val eo = DayOverride(d, "CN:深圳", "深圳", OverrideScope.EVENING)
+        val a1 = DayCounting.attributeDay(d, m, e, null, listOf(eo))
+        assertEquals(listOf(CityShare("CN:深圳", "深圳", 1.0)), a1.shares)
+        assertTrue(a1.manual)
+        // 只更正上半天为北京 → 北京 0.5 + 香港 0.5,保住拆分
+        val mo = DayOverride(d, "CN:北京", "北京", OverrideScope.MORNING)
+        val a2 = DayCounting.attributeDay(d, m, e, null, listOf(mo))
+        assertEquals(
+            listOf(CityShare("CN:北京", "北京", 0.5), CityShare("CN:香港", "香港", 0.5)),
+            a2.shares,
+        )
+        // FULL 与半天并存时 FULL 优先(存储层本会互斥,算法兜底)
+        val full = DayOverride(d, "CN:上海", "上海", OverrideScope.FULL)
+        val a3 = DayCounting.attributeDay(d, m, e, null, listOf(full, mo))
+        assertEquals(listOf(CityShare("CN:上海", "上海", 1.0)), a3.shares)
+        // 无打卡的日子,单独一个半天更正 → 单样本整天
+        val a4 = DayCounting.attributeDay(d, null, null, null, listOf(eo))
+        assertEquals(listOf(CityShare("CN:深圳", "深圳", 1.0)), a4.shares)
     }
 
     @Test

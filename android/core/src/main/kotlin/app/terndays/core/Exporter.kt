@@ -24,7 +24,7 @@ object Exporter {
         attr.shares.isEmpty() -> "无记录"
         else -> attr.shares.joinToString(" / ") {
             it.cityName + if (it.weight >= 1.0) " +1" else " +0.5"
-        } + if (attr.manual) "（补记）" else ""
+        } + if (attr.manual) "（手动）" else ""
     }
 
     data class DailyRow(
@@ -65,14 +65,15 @@ object Exporter {
 
     private fun dailyTable(stats: YearStats, punches: List<Punch>): List<List<String>> {
         val rows = ArrayList<List<String>>()
-        rows.add(listOf("日期", "星期", "早打卡", "早城市", "晚打卡", "晚城市", "计入", "备注"))
+        rows.add(listOf("日期", "星期", "早打卡", "早城市", "晚打卡", "晚城市", "首点", "计入", "备注"))
         for (r in dailyRows(stats, punches)) {
             val notes = ArrayList<String>()
-            if (r.attribution.manual) notes.add("手动补记")
+            if (r.attribution.manual) notes.add("手动更正/补记")
             if (r.morning?.delayed == true) notes.add("早点延迟")
             if (r.evening?.delayed == true) notes.add("晚点延迟")
-            if (r.morning?.fromCache == true || r.evening?.fromCache == true) notes.add("用了缓存位置")
-            if (r.extra != null) notes.add("首点 ${punchTime(r.extra)} ${r.extra.cityName}")
+            if (r.morning?.fromCache == true || r.evening?.fromCache == true || r.extra?.fromCache == true) {
+                notes.add("用了缓存位置")
+            }
             rows.add(
                 listOf(
                     r.date.format(DATE),
@@ -81,6 +82,7 @@ object Exporter {
                     r.morning?.cityName ?: "",
                     r.evening?.let(::punchTime) ?: "",
                     r.evening?.cityName ?: "",
+                    r.extra?.let { "首 ${punchTime(it)} ${it.cityName}" } ?: "",
                     attributionText(r.attribution),
                     notes.joinToString("；"),
                 ),

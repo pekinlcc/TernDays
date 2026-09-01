@@ -30,15 +30,19 @@
     <string>TernDays 需要定位来记录你每天所在的城市（仅城市级别，数据保存在本机）。</string>
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
     <string>选择「始终允许」后，系统可以在每天早晚打卡时间附近唤醒 TernDays 自动记录所在城市；应用不做持续追踪，数据只存本机。</string>
+    <!-- 只用 BGAppRefreshTask(fetch);SLC 唤醒不需要 location 后台模式,
+         processing 从未使用——多余声明是审核风险 -->
     <key>UIBackgroundModes</key>
     <array>
-        <string>location</string>
         <string>fetch</string>
-        <string>processing</string>
     </array>
     <key>BGTaskSchedulerPermittedIdentifiers</key>
     <array>
         <string>app.terndays.refresh</string>
     </array>
+    <key>NSCameraUsageDescription</key>
+    <string>换手机迁移时用相机扫描旧手机上的二维码，仅此用途。</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>换手机迁移时通过局域网把数据直接传到新手机，不经过任何服务器。</string>
 </dict>
 </plist>

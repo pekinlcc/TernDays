@@ -35,9 +35,9 @@ class ExporterTest {
         assertTrue(csv.contains("# 城市汇总 · 2026 年"))
         assertTrue(csv.contains("上海,1.5,1,1"))
         assertTrue(csv.contains("深圳,0.5,0,1"))
-        assertTrue(csv.contains("2026-01-01,周四,07:02,上海,17:05,上海,上海 +1,"))
-        assertTrue(csv.contains("2026-01-02,周五,07:00,上海,17:30,深圳,上海 +0.5 / 深圳 +0.5,"))
-        assertTrue(csv.contains("2026-01-03,周六,,,,,无记录,"))
+        assertTrue(csv.contains("2026-01-01,周四,07:02,上海,17:05,上海,,上海 +1,"))
+        assertTrue(csv.contains("2026-01-02,周五,07:00,上海,17:30,深圳,,上海 +0.5 / 深圳 +0.5,"))
+        assertTrue(csv.contains("2026-01-03,周六,,,,,,无记录,"))
     }
 
     @Test

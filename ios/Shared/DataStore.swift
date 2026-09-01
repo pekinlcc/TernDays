@@ -32,13 +32,27 @@ final class DataStore {
             dir = legacy
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
-        if let d = try? Data(contentsOf: punchesURL),
-           let list = try? JSONDecoder().decode([Punch].self, from: d) {
-            punches = list
+        punches = Self.loadList(punchesURL) ?? []
+        overrides = Self.loadList(overridesURL) ?? []
+    }
+
+    /// 读档。解码失败时把损坏文件改名保留(.corrupt),绝不让后续 persist 静默清空全部历史。
+    private static func loadList<T: Decodable>(_ url: URL) -> [T]? {
+        guard let d = try? Data(contentsOf: url) else { return nil }
+        if let list = try? JSONDecoder().decode([T].self, from: d) {
+            return list
         }
-        if let d = try? Data(contentsOf: overridesURL),
-           let list = try? JSONDecoder().decode([DayOverride].self, from: d) {
-            overrides = list
+        let backup = url.deletingPathExtension()
+            .appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970)).json")
+        try? FileManager.default.moveItem(at: url, to: backup)
+        return nil
+    }
+
+    /// 小组件进程可能长期复用:每次生成时间线前重读磁盘,避免展示过期数据。
+    func reloadFromDisk() {
+        queue.sync {
+            punches = Self.loadList(punchesURL) ?? punches
+            overrides = Self.loadList(overridesURL) ?? overrides
         }
     }
 
@@ -81,6 +95,41 @@ final class DataStore {
         queue.sync { !punches.isEmpty }
     }
 
+    /// 行程连续性锚点:最近一条**非改判**(viaContext != true)且解析成功的打卡。
+    /// 被连续性/误差圈粘住的点不作锚,36h 上限才能真正限制整条粘滞链。
+    func latestAnchorPunch() -> Punch? {
+        queue.sync {
+            punches.filter { $0.cityKey != "unknown" && $0.viaContext != true }
+                .max { $0.epochMs < $1.epochMs }
+        }
+    }
+
+    /// 该日的整天更正(锚点参照只认整天更正)。
+    func overrideFor(date: LocalDate) -> DayOverride? {
+        queue.sync { overrides.first { $0.localDate == date && $0.scope == .full } }
+    }
+
+    /// 历史重放的结果落盘:按 (日期, 时段) 定位并替换城市与改判标记。@return 城市被改动的条数。
+    func applyResolveOutcomes(_ outcomes: [(date: LocalDate, slot: Slot, key: String, name: String, via: Bool)]) -> Int {
+        queue.sync {
+            var changed = 0
+            for o in outcomes {
+                guard let i = punches.firstIndex(where: { $0.localDate == o.date && $0.slot == o.slot }) else { continue }
+                var p = punches[i]
+                if p.cityKey != o.key || p.cityName != o.name { changed += 1 }
+                p = Punch(
+                    localDate: p.localDate, slot: p.slot, epochMs: p.epochMs, zoneId: p.zoneId,
+                    lat: p.lat, lng: p.lng, accuracyM: p.accuracyM,
+                    cityKey: o.key, cityName: o.name,
+                    delayed: p.delayed, fromCache: p.fromCache, viaContext: o.via
+                )
+                punches[i] = p
+            }
+            persist()
+            return changed
+        }
+    }
+
     func punchesForYear(_ year: Int) -> [Punch] {
         queue.sync { punches.filter { $0.localDate.year == year }.sorted { $0.epochMs < $1.epochMs } }
     }
@@ -89,18 +138,64 @@ final class DataStore {
         queue.sync { overrides.filter { $0.localDate.year == year } }
     }
 
+    /// 写入手动更正。整天与半天互斥:写整天清掉该日半天,写半天清掉该日整天。
     func setOverride(_ o: DayOverride) {
         queue.sync {
-            overrides.removeAll { $0.localDate == o.localDate }
+            if o.scope == .full {
+                overrides.removeAll { $0.localDate == o.localDate }
+            } else {
+                overrides.removeAll { $0.localDate == o.localDate && ($0.scope == .full || $0.scope == o.scope) }
+            }
             overrides.append(o)
             persist()
         }
     }
 
+    /// 恢复整天自动判定:删除该日全部手动更正。
     func removeOverride(date: LocalDate) {
         queue.sync {
             overrides.removeAll { $0.localDate == date }
             persist()
+        }
+    }
+
+    func allPunches() -> [Punch] {
+        queue.sync { punches.sorted { $0.epochMs < $1.epochMs } }
+    }
+
+    func allOverrides() -> [DayOverride] {
+        queue.sync { overrides }
+    }
+
+    struct MergeResult {
+        let punchesAdded: Int
+        let punchesSkipped: Int
+        let overridesAdded: Int
+        let overridesSkipped: Int
+    }
+
+    /// 迁移导入合并:打卡按 (日期, 时段)、手动记录按日期去重,本机已有的一律保留。
+    func mergeImported(punches newPunches: [Punch], overrides newOverrides: [DayOverride]) -> MergeResult {
+        queue.sync {
+            var pAdded = 0, pSkipped = 0, oAdded = 0, oSkipped = 0
+            for p in newPunches {
+                if punches.contains(where: { $0.localDate == p.localDate && $0.slot == p.slot }) {
+                    pSkipped += 1
+                } else {
+                    punches.append(p)
+                    pAdded += 1
+                }
+            }
+            for o in newOverrides {
+                if overrides.contains(where: { $0.localDate == o.localDate && $0.scope == o.scope }) {
+                    oSkipped += 1
+                } else {
+                    overrides.append(o)
+                    oAdded += 1
+                }
+            }
+            if pAdded + oAdded > 0 { persist() }
+            return MergeResult(punchesAdded: pAdded, punchesSkipped: pSkipped, overridesAdded: oAdded, overridesSkipped: oSkipped)
         }
     }
 

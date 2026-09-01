@@ -10,6 +10,8 @@ struct ExportView: View {
     @State private var incDaily = true
     @State private var data: YearData?
     @State private var shareURL: URL?
+    @State private var busy = false
+    @State private var failure: String?
 
     init(initialYear: Int) {
         self.initialYear = initialYear
@@ -56,6 +58,10 @@ struct ExportView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 8)
+
+                previewCard
+                    .padding(.horizontal, 20)
+                    .padding(.top, 12)
             }
 
             VStack(spacing: 8) {
@@ -63,15 +69,20 @@ struct ExportView: View {
                     generate()
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: "square.and.arrow.up").font(.system(size: 15, weight: .semibold))
-                        Text("生成文件并分享").font(.system(size: 15, weight: .semibold))
+                        if busy {
+                            ProgressView().tint(Td.onAccent)
+                            Text("正在生成…").font(.system(size: 15, weight: .semibold))
+                        } else {
+                            Image(systemName: "square.and.arrow.up").font(.system(size: 15, weight: .semibold))
+                            Text("生成文件并分享").font(.system(size: 15, weight: .semibold))
+                        }
                     }
-                    .foregroundColor(.white)
+                    .foregroundColor(Td.onAccent)
                     .frame(maxWidth: .infinity)
                     .frame(height: 52)
                     .background(RoundedRectangle(cornerRadius: 14).fill(Td.accent))
                 }
-                .disabled(!incSummary && !incDaily)
+                .disabled(busy || (!incSummary && !incDaily))
                 Text("通过系统分享面板保存到手机或发送给其他 App\n文件在本机生成，不经过网络")
                     .font(.system(size: 11)).foregroundColor(Td.faint)
                     .multilineTextAlignment(.center)
@@ -85,6 +96,53 @@ struct ExportView: View {
         .task(id: year) { data = YearData.load(year: year) }
         .sheet(item: $shareURL) { url in
             ActivityView(items: [url])
+        }
+        .alert("导出没有成功", isPresented: .init(
+            get: { failure != nil },
+            set: { if !$0 { failure = nil } }
+        )) {
+            Button("知道了") { failure = nil }
+        } message: {
+            Text(failure ?? "")
+        }
+    }
+
+    /// 明细预览:最近 3 天,让用户导出前先看一眼内容(对齐 Android)
+    @ViewBuilder
+    private var previewCard: some View {
+        let rows = data.map { Exporter.dailyRows(stats: $0.stats, punches: $0.punches) }?
+            .filter { $0.morning != nil || $0.evening != nil }
+            .suffix(3) ?? []
+        if !rows.isEmpty {
+            TdCard {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("预览 · 每日明细").font(.system(size: 12)).foregroundColor(Td.faint)
+                    previewRow(["日期", "早7点", "晚5点", "计入"], header: true)
+                    ForEach(Array(rows), id: \.date) { r in
+                        previewRow([
+                            String(format: "%02d-%02d", r.date.month, r.date.day),
+                            r.morning?.cityName ?? "–",
+                            r.evening?.cityName ?? "–",
+                            r.attribution.shares
+                                .map { $0.cityName + ($0.weight >= 1.0 ? " +1" : " +0.5") }
+                                .joined(separator: " "),
+                        ])
+                    }
+                }
+                .padding(14)
+            }
+        }
+    }
+
+    private func previewRow(_ cells: [String], header: Bool = false) -> some View {
+        HStack(spacing: 6) {
+            ForEach(Array(cells.enumerated()), id: \.offset) { _, c in
+                Text(c)
+                    .font(.system(size: 11, weight: header ? .semibold : .regular))
+                    .foregroundColor(header ? Td.muted : Td.ink)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(1)
+            }
         }
     }
 
@@ -129,20 +187,43 @@ struct ExportView: View {
     }
 
     private func generate() {
-        guard let d = data else { return }
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("exports", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url: URL
-        if useXlsx {
-            url = dir.appendingPathComponent("TernDays-\(year).xlsx")
-            try? Exporter.exportXlsx(stats: d.stats, punches: d.punches, includeSummary: incSummary, includeDaily: incDaily)
-                .write(to: url)
-        } else {
-            url = dir.appendingPathComponent("TernDays-\(year).csv")
-            try? Exporter.exportCsv(stats: d.stats, punches: d.punches, includeSummary: incSummary, includeDaily: incDaily)
-                .data(using: .utf8)?.write(to: url)
+        guard let d = data, !busy else { return }
+        busy = true
+        let year = self.year, useXlsx = self.useXlsx
+        let incSummary = self.incSummary, incDaily = self.incDaily
+        DispatchQueue.global(qos: .userInitiated).async {
+            var result: Result<URL, Error>
+            do {
+                let dir = FileManager.default.temporaryDirectory.appendingPathComponent("exports", isDirectory: true)
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let url: URL
+                if useXlsx {
+                    url = dir.appendingPathComponent("TernDays-\(year).xlsx")
+                    let bytes = Exporter.exportXlsx(stats: d.stats, punches: d.punches,
+                                                    includeSummary: incSummary, includeDaily: incDaily)
+                    try bytes.write(to: url)
+                } else {
+                    url = dir.appendingPathComponent("TernDays-\(year).csv")
+                    let text = Exporter.exportCsv(stats: d.stats, punches: d.punches,
+                                                  includeSummary: incSummary, includeDaily: incDaily)
+                    guard let data = text.data(using: .utf8) else {
+                        throw NSError(domain: "TernDays", code: -1,
+                                      userInfo: [NSLocalizedDescriptionKey: "内容编码失败"])
+                    }
+                    try data.write(to: url)
+                }
+                result = .success(url)
+            } catch {
+                result = .failure(error)
+            }
+            DispatchQueue.main.async {
+                busy = false
+                switch result {
+                case .success(let url): shareURL = url
+                case .failure(let e): failure = "生成文件失败:\(e.localizedDescription)"
+                }
+            }
         }
-        shareURL = url
     }
 }
 

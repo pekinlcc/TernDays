@@ -101,6 +101,9 @@ struct Punch: Codable, Identifiable {
     let cityName: String
     var delayed: Bool = false
     var fromCache: Bool = false
+    /// true = 城市由行程连续性/误差圈改判(非几何最近);此类点不作连续性锚点。
+    /// Optional 以兼容旧版存档(缺键按 nil 处理)。
+    var viaContext: Bool? = false
 
     var clock: String {
         let date = Date(timeIntervalSince1970: Double(epochMs) / 1000)
@@ -119,10 +122,35 @@ struct Punch: Codable, Identifiable {
     }
 }
 
+/// 手动更正的作用范围:整天,或只改上/下半天样本。
+enum OverrideScope: String, Codable {
+    case full = "FULL"
+    case morning = "MORNING"
+    case evening = "EVENING"
+}
+
+/// 手动补记/更正。full = 整天;morning/evening = 只替换对应半天样本
+/// (跨城出行日可只改错的那半天,保住 0.5+0.5 的拆分)。
+/// scope 为 Optional 以兼容旧版存档(缺键即 full)。
 struct DayOverride: Codable {
     let localDate: LocalDate
     let cityKey: String
     let cityName: String
+    var scopeRaw: OverrideScope? = .full
+
+    var scope: OverrideScope { scopeRaw ?? .full }
+
+    enum CodingKeys: String, CodingKey {
+        case localDate, cityKey, cityName
+        case scopeRaw = "scope"
+    }
+
+    init(localDate: LocalDate, cityKey: String, cityName: String, scope: OverrideScope = .full) {
+        self.localDate = localDate
+        self.cityKey = cityKey
+        self.cityName = cityName
+        self.scopeRaw = scope
+    }
 }
 
 struct CityShare: Equatable {

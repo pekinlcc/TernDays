@@ -44,6 +44,8 @@ struct TernProvider: TimelineProvider {
     }
 
     private func load() -> TernEntry {
+        // 小组件进程可能被系统复用:每次生成时间线前重读磁盘,避免展示主应用早已更新过的旧数据
+        DataStore.shared.reloadFromDisk()
         let today = LocalDate.today()
         let stats = DayCounting.computeYearStats(
             year: today.year,

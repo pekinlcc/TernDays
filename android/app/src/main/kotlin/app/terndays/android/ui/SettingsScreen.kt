@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
@@ -47,18 +48,23 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import app.terndays.android.DataBus
 import app.terndays.android.R
 import app.terndays.android.db.PunchDb
 import app.terndays.android.geo.Cities
+import app.terndays.android.migrate.MigrateClient
 import app.terndays.android.util.Perms
 import app.terndays.android.util.VendorKeepAlive
 import app.terndays.core.DayOverride
+import app.terndays.core.MigrationLink
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
     val context = LocalContext.current
     var tick by remember { mutableIntStateOf(0) }
     LifecycleResumeEffect(Unit) {
@@ -67,7 +73,8 @@ fun SettingsScreen(onBack: () -> Unit) {
     }
 
     val year = LocalDate.now().year
-    val data by produceState<YearData?>(initialValue = null, tick) {
+    val dataVersion = DataBus.version.intValue
+    val data by produceState<YearData?>(initialValue = null, tick, dataVersion) {
         value = loadYearData(context, year)
     }
 
@@ -79,11 +86,30 @@ fun SettingsScreen(onBack: () -> Unit) {
     ) { tick++ }
 
     var backfillOpen by remember { mutableStateOf(false) }
+    var importState by remember { mutableStateOf<ImportState?>(null) }
+    val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        val text = result.contents ?: return@rememberLauncherForActivityResult
+        val link = MigrationLink.parse(text)
+        if (link == null) {
+            importState = ImportState.Failed("这不是 TernDays 的迁移二维码")
+        } else {
+            importState = ImportState.Working("正在连接旧手机…")
+            MigrateClient.run(
+                context, link,
+                onStatus = { msg -> importState = ImportState.Working(msg) },
+                onDone = { outcome ->
+                    importState = ImportState.Done(outcome)
+                    tick++
+                },
+                onError = { msg -> importState = ImportState.Failed(msg) },
+            )
+        }
+    }
 
     Column(Modifier.fillMaxSize().background(Td.Bg).statusBarsPadding().padding(horizontal = 20.dp)) {
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconSquare(R.drawable.ic_chev_left) { onBack() }
+            IconSquare(R.drawable.ic_chev_left, "返回") { onBack() }
             Text(
                 "设置", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Td.Ink,
                 modifier = Modifier.weight(1f), textAlign = TextAlign.Center,
@@ -157,7 +183,7 @@ fun SettingsScreen(onBack: () -> Unit) {
 
             item {
                 Text(
-                    "手动补记", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Td.Muted,
+                    "手动补记与更正", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Td.Muted,
                     modifier = Modifier.padding(start = 2.dp, top = 4.dp),
                 )
             }
@@ -175,8 +201,14 @@ fun SettingsScreen(onBack: () -> Unit) {
                                     fontSize = 12.sp, color = Td.Muted,
                                 )
                             }
-                            Icon(painterResource(R.drawable.ic_chev_right), null, Modifier.size(16.dp), tint = Color(0xFFC3CCD4))
+                            Icon(painterResource(R.drawable.ic_chev_right), null, Modifier.size(16.dp), tint = Td.Chevron)
                         }
+                        HorizontalDivider(color = Td.Divider, thickness = 1.dp)
+                        Text(
+                            "记录的城市不对？在首页「今日打卡」点「纠正」，或到城市详情里点那一天即可更正",
+                            fontSize = 12.sp, color = Td.Muted, lineHeight = 18.sp,
+                            modifier = Modifier.padding(vertical = 12.dp),
+                        )
                         val overrides = data?.overrides ?: emptyList()
                         if (overrides.isNotEmpty()) {
                             HorizontalDivider(color = Td.Divider, thickness = 1.dp)
@@ -186,11 +218,11 @@ fun SettingsScreen(onBack: () -> Unit) {
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Text(
-                                        "${o.localDate.monthValue}月${o.localDate.dayOfMonth}日 → ${o.cityName}",
+                                        "${o.localDate.monthValue}月${o.localDate.dayOfMonth}日 → ${o.cityName}（手动）",
                                         fontSize = 13.sp, color = Td.Ink, modifier = Modifier.weight(1f),
                                     )
                                     Text(
-                                        "删除", fontSize = 12.sp, color = Td.WarmDeep,
+                                        "恢复自动", fontSize = 12.sp, color = Td.WarmDeep,
                                         modifier = Modifier.clickable {
                                             PunchDb.get(context).removeOverride(o.localDate)
                                             app.terndays.android.widget.TernDaysWidgetProvider.updateAll(context)
@@ -200,6 +232,36 @@ fun SettingsScreen(onBack: () -> Unit) {
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            item {
+                Text(
+                    "换手机", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Td.Muted,
+                    modifier = Modifier.padding(start = 2.dp, top = 4.dp),
+                )
+            }
+            item {
+                TdCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(horizontal = 16.dp)) {
+                        MigrateRow(
+                            "迁移到新手机", "本机是旧手机:展示二维码,让新手机扫码接收全部数据",
+                            onClick = onMigrate,
+                        )
+                        HorizontalDivider(color = Td.Divider, thickness = 1.dp)
+                        MigrateRow(
+                            "从旧手机导入", "本机是新手机:扫旧手机上的二维码,数据经加密局域网直传",
+                            onClick = {
+                                scanLauncher.launch(
+                                    ScanOptions()
+                                        .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                                        .setPrompt("扫描旧手机 TernDays 迁移页上的二维码")
+                                        .setBeepEnabled(false)
+                                        .setOrientationLocked(false),
+                                )
+                            },
+                        )
                     }
                 }
             }
@@ -243,6 +305,58 @@ fun SettingsScreen(onBack: () -> Unit) {
         }
     }
 
+    when (val s = importState) {
+        null -> Unit
+        is ImportState.Working -> Dialog(onDismissRequest = { }) {
+            TdCard(Modifier.fillMaxWidth()) {
+                Column(
+                    Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    CircularProgressIndicator(color = Td.Accent)
+                    Text(s.message, fontSize = 13.sp, color = Td.Muted, textAlign = TextAlign.Center)
+                }
+            }
+        }
+        is ImportState.Done -> Dialog(onDismissRequest = { importState = null }) {
+            TdCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("导入完成 ✓", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Td.Ink)
+                    val r = s.outcome.result
+                    Text(
+                        buildString {
+                            append("新增 ${r.punchesAdded} 条打卡、${r.overridesAdded} 条手动记录")
+                            if (r.punchesSkipped + r.overridesSkipped > 0) {
+                                append(";本机已有的 ${r.punchesSkipped + r.overridesSkipped} 条保持不变")
+                            }
+                            if (s.outcome.remapped > 0) append("\n已按本机城市库修正 ${s.outcome.remapped} 条城市判定")
+                        },
+                        fontSize = 13.sp, color = Td.Muted, lineHeight = 20.sp,
+                    )
+                    Text(
+                        "好", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.AccentDeep,
+                        modifier = Modifier.align(Alignment.End)
+                            .clickable { importState = null }.padding(8.dp),
+                    )
+                }
+            }
+        }
+        is ImportState.Failed -> Dialog(onDismissRequest = { importState = null }) {
+            TdCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("导入没有成功", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Td.Ink)
+                    Text(s.message, fontSize = 13.sp, color = Td.Muted, lineHeight = 20.sp)
+                    Text(
+                        "知道了", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.AccentDeep,
+                        modifier = Modifier.align(Alignment.End)
+                            .clickable { importState = null }.padding(8.dp),
+                    )
+                }
+            }
+        }
+    }
+
     if (backfillOpen) {
         BackfillDialog(
             unrecorded = data?.stats?.unrecordedDates ?: emptyList(),
@@ -255,6 +369,27 @@ fun SettingsScreen(onBack: () -> Unit) {
                 tick++
             },
         )
+    }
+}
+
+private sealed interface ImportState {
+    data class Working(val message: String) : ImportState
+    data class Done(val outcome: MigrateClient.Outcome) : ImportState
+    data class Failed(val message: String) : ImportState
+}
+
+@Composable
+private fun MigrateRow(title: String, sub: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.Ink)
+            Text(sub, fontSize = 12.sp, color = Td.Muted, lineHeight = 17.sp)
+        }
+        Spacer(Modifier.width(10.dp))
+        Icon(painterResource(R.drawable.ic_chev_right), null, Modifier.size(16.dp), tint = Td.Chevron)
     }
 }
 
@@ -307,11 +442,11 @@ private fun BackfillDialog(
     val context = LocalContext.current
     var pickedDate by remember { mutableStateOf<LocalDate?>(null) }
     var query by remember { mutableStateOf("") }
-    val results by produceState(initialValue = emptyList<Pair<String, String>>(), query) {
+    val results by produceState(initialValue = emptyList<app.terndays.core.CityMatcher.SearchHit>(), query) {
         value = if (query.isBlank()) {
             emptyList()
         } else {
-            withContext(Dispatchers.IO) { Cities.get(context).searchByName(query, 12) }
+            withContext(Dispatchers.IO) { Cities.get(context).search(query, 12) }
         }
     }
 
@@ -341,22 +476,38 @@ private fun BackfillDialog(
                     )
                     OutlinedTextField(
                         value = query, onValueChange = { query = it },
-                        placeholder = { Text("搜索城市名", fontSize = 13.sp) },
+                        placeholder = { Text("搜索城市名（支持拼音）", fontSize = 13.sp) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
-                    val options = if (query.isBlank()) recentCities else results
                     if (query.isBlank() && recentCities.isNotEmpty()) {
                         Text("常去城市", fontSize = 11.sp, color = Td.Faint)
                     }
                     LazyColumn(Modifier.heightIn(max = 260.dp)) {
-                        items(options) { (key, name) ->
-                            Text(
-                                name, fontSize = 14.sp, color = Td.Ink,
-                                modifier = Modifier.fillMaxWidth()
-                                    .clickable { onConfirm(date, key, name) }
-                                    .padding(vertical = 10.dp),
-                            )
+                        if (query.isBlank()) {
+                            items(recentCities) { (key, name) ->
+                                Text(
+                                    name, fontSize = 14.sp, color = Td.Ink,
+                                    modifier = Modifier.fillMaxWidth()
+                                        .clickable { onConfirm(date, key, name) }
+                                        .padding(vertical = 10.dp),
+                                )
+                            }
+                        } else {
+                            items(results) { hit ->
+                                Row(
+                                    Modifier.fillMaxWidth()
+                                        .clickable { onConfirm(date, hit.cityKey, hit.cityName) }
+                                        .padding(vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(hit.cityName, fontSize = 14.sp, color = Td.Ink)
+                                    if (hit.region.isNotEmpty()) {
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(hit.region, fontSize = 12.sp, color = Td.Faint)
+                                    }
+                                }
+                            }
                         }
                     }
                 }

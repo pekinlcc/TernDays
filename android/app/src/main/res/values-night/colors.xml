@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <color name="td_window_bg">#141C26</color>
     <color name="widgetBg">#1D2937</color>
     <color name="widgetInk">#E8EEF3</color>
     <color name="widgetMuted">#9FB0BF</color>

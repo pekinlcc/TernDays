@@ -18,13 +18,24 @@ data class Punch(
     val cityName: String,
     val delayed: Boolean = false,
     val fromCache: Boolean = false,
+    /** true = 该点城市由行程连续性/误差圈改判(非几何最近);此类点不作连续性锚点 */
+    val viaContext: Boolean = false,
 )
 
-/** 手动补记：整天记入某个城市。 */
+/** 手动更正的作用范围:整天,或只改上/下半天样本。 */
+enum class OverrideScope { FULL, MORNING, EVENING }
+
+/**
+ * 手动补记/更正。FULL = 整天记入该城市(优先于一切打卡);
+ * MORNING/EVENING = 只替换对应半天样本,另一半天仍按打卡判定
+ * (跨城出行日可只改错的那半天,保住正确的 0.5+0.5 拆分)。
+ * 同一天 FULL 与半天更正互斥,由存储层保证。
+ */
 data class DayOverride(
     val localDate: LocalDate,
     val cityKey: String,
     val cityName: String,
+    val scope: OverrideScope = OverrideScope.FULL,
 )
 
 data class CityShare(val cityKey: String, val cityName: String, val weight: Double)

@@ -17,7 +17,12 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
 
     private let lm = CLLocationManager()
     @Published var authStatus: CLAuthorizationStatus = .notDetermined
-    private var oneShotCompletion: ((CLLocation?) -> Void)?
+    /// 待决的一次性定位回调。只在主线程访问(CLLocationManager 在主线程创建,
+    /// delegate 回调也在主线程),新请求追加而不是覆盖——BGAppRefresh 与开屏打卡
+    /// 同时到来时,两个回调都会被兑现,后台任务不再因回调被覆盖而以失败收场。
+    private var pendingLocationCallbacks: [(CLLocation?) -> Void] = []
+    /// 代次标记:每次分发后 +1,让 30s 超时与迟到的 delegate 回调自动失效。
+    private var locationGeneration = 0
 
     override private init() {
         super.init()
@@ -82,6 +87,9 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
             } else if let cached = self.lm.location,
                       Date().timeIntervalSince(cached.timestamp) < 6 * 3600 {
                 self.record(slot: slot, location: cached, fromCache: true)
+            } else {
+                // 完全拿不到位置:提醒用户打开应用补打(对齐 Android 的失败通知)
+                self.notifyPunchFailed(slot: slot)
             }
             completion?()
         }
@@ -89,18 +97,42 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
 
     private func requestOneShotLocation(_ completion: @escaping (CLLocation?) -> Void) {
         guard hasAnyAuth else { completion(nil); return }
-        oneShotCompletion = completion
-        lm.requestLocation()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
-            if let pending = self?.oneShotCompletion {
-                self?.oneShotCompletion = nil
-                pending(nil)
+        DispatchQueue.main.async { [self] in
+            pendingLocationCallbacks.append(completion)
+            guard pendingLocationCallbacks.count == 1 else { return } // 已有请求在途,搭车等结果
+            let generation = locationGeneration
+            lm.requestLocation()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+                guard let self, generation == self.locationGeneration else { return }
+                self.flushLocationCallbacks(nil)
             }
         }
     }
 
+    /// 主线程:一次性取出全部待决回调并分发;代次 +1 使超时/迟到回调作废。
+    private func flushLocationCallbacks(_ location: CLLocation?) {
+        locationGeneration += 1
+        let callbacks = pendingLocationCallbacks
+        pendingLocationCallbacks = []
+        callbacks.forEach { $0(location) }
+    }
+
     private func record(slot: Slot, location: CLLocation, fromCache: Bool) {
-        let match = Cities.matcher.nearest(lat: location.coordinate.latitude, lng: location.coordinate.longitude)
+        // 交叉验证：top-3 候选 + 上一次打卡的行程连续性 + 定位误差圈，
+        // 消掉真实边界（深圳/香港、珠海/澳门…）附近的最近邻模糊
+        let accuracy = location.horizontalAccuracy >= 0 ? location.horizontalAccuracy : nil
+        let candidates = Cities.matcher.nearestByCity(
+            lat: location.coordinate.latitude, lng: location.coordinate.longitude, k: 3
+        )
+        // 锚点 = 最近一条非改判打卡;当日有手动更正时以更正城市为准(防粘滞链自续期/覆盖用户判断)
+        let prev = DataStore.shared.latestAnchorPunch().map { anchor in
+            CityResolver.Prev(
+                cityKey: DataStore.shared.overrideFor(date: anchor.localDate)?.cityKey ?? anchor.cityKey,
+                ageHours: (Date().timeIntervalSince1970 * 1000 - Double(anchor.epochMs)) / 3_600_000
+            )
+        }
+        let resolution = CityResolver.resolve(candidates: candidates, accuracyM: accuracy, prev: prev)
+        let match = resolution?.match
         let now = Date()
         let punch = Punch(
             localDate: LocalDate(from: now, in: .current),
@@ -109,11 +141,12 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
             zoneId: TimeZone.current.identifier,
             lat: location.coordinate.latitude,
             lng: location.coordinate.longitude,
-            accuracyM: location.horizontalAccuracy >= 0 ? location.horizontalAccuracy : nil,
+            accuracyM: accuracy,
             cityKey: match?.cityKey ?? "unknown",
             cityName: match?.cityName ?? "未知位置",
             delayed: PunchRules.isDelayed(at: now, slot: slot),
-            fromCache: fromCache
+            fromCache: fromCache,
+            viaContext: resolution?.viaContext ?? false
         )
         DataStore.shared.insertPunch(punch)
         WidgetCenter.shared.reloadAllTimelines()
@@ -123,9 +156,8 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
     // MARK: CLLocationManagerDelegate
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        if let completion = oneShotCompletion {
-            oneShotCompletion = nil
-            completion(locations.last)
+        if !pendingLocationCallbacks.isEmpty {
+            flushLocationCallbacks(locations.last)
         } else if let loc = locations.last {
             // SLC 后台唤醒路径
             punchIfNeeded(with: loc)
@@ -133,10 +165,21 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        if let completion = oneShotCompletion {
-            oneShotCompletion = nil
-            completion(nil)
+        if !pendingLocationCallbacks.isEmpty {
+            flushLocationCallbacks(nil)
         }
+    }
+
+    /// 打卡失败提醒:打开应用会自动补打,也可手动补记
+    private func notifyPunchFailed(slot: Slot) {
+        let label = slot == .morning ? "早上 7 点" : (slot == .evening ? "下午 5 点" : "首次")
+        let content = UNMutableNotificationContent()
+        content.title = "\(label)打卡没成功"
+        content.body = "没拿到定位。打开 TernDays 会自动补打,也可在设置中手动补记。"
+        content.sound = .default
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "punch-failed", content: content, trigger: nil)
+        )
     }
 
     // MARK: 本地通知（07:00 / 17:00 提醒）
@@ -153,6 +196,7 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
                 let content = UNMutableNotificationContent()
                 content.title = "TernDays 打卡"
                 content.body = text
+                content.sound = .default
                 var dc = DateComponents()
                 dc.hour = hour
                 dc.minute = 0
@@ -165,7 +209,7 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
     // MARK: BGAppRefresh
 
     func registerBackgroundTask() {
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.refreshTaskId, using: nil) { [weak self] task in
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.refreshTaskId, using: .main) { [weak self] task in
             guard let self, let refresh = task as? BGAppRefreshTask else {
                 task.setTaskCompleted(success: false)
                 return

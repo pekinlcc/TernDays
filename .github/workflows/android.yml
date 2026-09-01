@@ -35,6 +35,26 @@ jobs:
         working-directory: android
         run: ./gradlew --no-daemon :app:assembleRelease
 
+      - name: Check version consistency
+        run: |
+          # RELEASE_VERSION 必须与 app 的 versionName 一致(v0.5 之前漂移过)
+          [ -f RELEASE_VERSION ] || exit 0
+          FILE_VER=$(tr -d ' \r\n' < RELEASE_VERSION)
+          GRADLE_VER=$(grep -oP 'versionName\s*=\s*"\K[^"]+' android/app/build.gradle.kts)
+          if [ "$FILE_VER" != "$GRADLE_VER" ]; then
+            echo "::error::RELEASE_VERSION($FILE_VER) 与 versionName($GRADLE_VER) 不一致"
+            exit 1
+          fi
+          case "$FILE_VER" in
+            [0-9]*.[0-9]*) ;;
+            *) echo "::error::RELEASE_VERSION 格式非法: $FILE_VER"; exit 1 ;;
+          esac
+          if [ ! -f "docs/release-notes/v${FILE_VER}.md" ]; then
+            echo "::error::缺少发布说明 docs/release-notes/v${FILE_VER}.md"
+            exit 1
+          fi
+          echo "version ok: $FILE_VER"
+
       - name: Resolve version
         id: ver
         run: |
@@ -45,8 +65,11 @@ jobs:
           fi
           if [ -z "$RELEASE" ] && [ -f RELEASE_VERSION ]; then
             FV="v$(tr -d ' \r\n' < RELEASE_VERSION)"
-            if [ "$FV" != "v" ] && ! git ls-remote --exit-code --tags origin "refs/tags/$FV" >/dev/null 2>&1; then
-              RELEASE="$FV"
+            # 区分「tag 不存在」与「查询失败」:网络/凭证问题不能被当成可以发版
+            if git ls-remote --tags origin "refs/tags/$FV" > /tmp/tagq 2>/dev/null; then
+              if [ ! -s /tmp/tagq ]; then RELEASE="$FV"; fi
+            else
+              echo "::warning::查询远端 tag 失败,本次跳过自动发版"
             fi
           fi
           VERSION="${RELEASE:-dev-${GITHUB_SHA::7}}"
@@ -60,6 +83,7 @@ jobs:
           path: TernDays-${{ steps.ver.outputs.version }}.apk
 
       - name: Sync release notes to published releases
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -75,7 +99,7 @@ jobs:
           done
 
       - name: Publish GitHub Release
-        if: steps.ver.outputs.release != ''
+        if: steps.ver.outputs.release != '' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/claude/city-days-tracker-app-ajp4h6')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.release }}

@@ -21,13 +21,15 @@ enum PunchRules {
         return slotInWindow(hour: c.hour!, minute: c.minute!)
     }
 
+    /// 是否延迟:严格超过「目标时刻 + 容差」即算(含秒,与 Android LocalTime 比较一致)
     static func isDelayed(at date: Date, slot: Slot, timeZone: TimeZone = .current) -> Bool {
         guard slot != .extra else { return false } // 首点没有目标时刻
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = timeZone
-        let c = cal.dateComponents([.hour, .minute], from: date)
-        let target = (slot == .morning ? morningHour : eveningHour) * 60 + delayToleranceMinutes
-        return (c.hour! * 60 + c.minute!) > target
+        let c = cal.dateComponents([.hour, .minute, .second], from: date)
+        let seconds = c.hour! * 3600 + c.minute! * 60 + (c.second ?? 0)
+        let target = ((slot == .morning ? morningHour : eveningHour) * 60 + delayToleranceMinutes) * 60
+        return seconds > target
     }
 
     /// 下一次打卡时刻（严格晚于 now，当前时区）

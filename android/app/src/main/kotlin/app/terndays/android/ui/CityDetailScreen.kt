@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -38,8 +39,12 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.terndays.android.DataBus
 import app.terndays.android.R
+import app.terndays.android.db.PunchDb
+import app.terndays.android.widget.TernDaysWidgetProvider
 import app.terndays.core.DayCounting
+import app.terndays.core.DayOverride
 import app.terndays.core.Punch
 import app.terndays.core.Slot
 import java.time.LocalDate
@@ -50,10 +55,18 @@ private data class CityDay(val weight: Double, val manual: Boolean)
 @Composable
 fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
     val context = LocalContext.current
-    val data by produceState<YearData?>(initialValue = null, cityKey, year) {
+    var tick by remember { mutableIntStateOf(0) }
+    val dataVersion = DataBus.version.intValue
+    val data by produceState<YearData?>(initialValue = null, cityKey, year, tick, dataVersion) {
         value = loadYearData(context, year)
     }
     val d = data
+    var correcting by remember { mutableStateOf<LocalDate?>(null) }
+
+    // 该城市在本年已无任何记录(如最后一天被更正走):自动返回列表,不停留在空页
+    LaunchedEffect(d) {
+        if (d != null && d.stats.cities.none { it.cityKey == cityKey }) onBack()
+    }
 
     val cityDays: Map<LocalDate, CityDay> = remember(d) {
         d?.stats?.days?.mapNotNull { (date, attr) ->
@@ -76,7 +89,7 @@ fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().background(Td.Bg).statusBarsPadding().padding(horizontal = 20.dp)) {
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconSquare(R.drawable.ic_chev_left) { onBack() }
+            IconSquare(R.drawable.ic_chev_left, "返回") { onBack() }
             Text(
                 cityName, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Td.Ink,
                 modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -107,6 +120,7 @@ fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
                         year = year, month = month, cityDays = cityDays,
                         onPrev = { if (month > 1) month-- },
                         onNext = { if (month < 12) month++ },
+                        onDayClick = { correcting = it },
                     )
                 }
             }
@@ -114,14 +128,43 @@ fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
                 Row(Modifier.padding(horizontal = 2.dp)) {
                     Text("打卡明细", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Td.Muted)
                     Spacer(Modifier.weight(1f))
-                    Text("最近在前", fontSize = 11.sp, color = Td.Faint)
+                    Text("点一天可更正城市", fontSize = 11.sp, color = Td.Faint)
                 }
             }
             item {
-                DetailListCard(cityDays, punchesByDate)
+                DetailListCard(cityDays, punchesByDate, onRowClick = { correcting = it })
             }
             item { Spacer(Modifier.navigationBarsPadding().height(8.dp)) }
         }
+    }
+
+    val target = correcting
+    if (target != null) {
+        val current = d?.stats?.days?.get(target)
+        val dayPunches = punchesByDate[target] ?: emptyList()
+        CityCorrectDialog(
+            date = target,
+            currentCityName = current?.shares?.joinToString(" + ") { it.cityName },
+            recentCities = d?.stats?.cities?.map { it.cityKey to it.cityName } ?: emptyList(),
+            hasBothHalves = dayPunches.any { it.slot == Slot.MORNING } && dayPunches.any { it.slot == Slot.EVENING },
+            onDismiss = { correcting = null },
+            onPick = { key, name, scope ->
+                PunchDb.get(context).setOverride(DayOverride(target, key, name, scope))
+                TernDaysWidgetProvider.updateAll(context)
+                correcting = null
+                tick++
+            },
+            onRestoreAuto = if (d?.overrides?.any { it.localDate == target } == true) {
+                {
+                    PunchDb.get(context).removeOverride(target)
+                    TernDaysWidgetProvider.updateAll(context)
+                    correcting = null
+                    tick++
+                }
+            } else {
+                null
+            },
+        )
     }
 }
 
@@ -132,6 +175,7 @@ private fun CalendarCard(
     cityDays: Map<LocalDate, CityDay>,
     onPrev: () -> Unit,
     onNext: () -> Unit,
+    onDayClick: (LocalDate) -> Unit,
 ) {
     val ym = YearMonth.of(year, month)
     val monthSum = cityDays.entries.filter { it.key.monthValue == month }.sumOf { it.value.weight }
@@ -140,17 +184,27 @@ private fun CalendarCard(
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
-                    Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(Td.Bg).clickable(onClick = onPrev),
+                    Modifier.size(48.dp).clickable(onClick = onPrev),
                     contentAlignment = Alignment.Center,
-                ) { Icon(painterResource(R.drawable.ic_chev_left), null, Modifier.size(16.dp), tint = Td.Ink) }
+                ) {
+                    Box(
+                        Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(Td.Bg),
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(painterResource(R.drawable.ic_chev_left), "上个月", Modifier.size(16.dp), tint = Td.Ink) }
+                }
                 Text(
                     "$year 年 $month 月", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Td.Ink,
                     modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 )
                 Box(
-                    Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(Td.Bg).clickable(onClick = onNext),
+                    Modifier.size(48.dp).clickable(onClick = onNext),
                     contentAlignment = Alignment.Center,
-                ) { Icon(painterResource(R.drawable.ic_chev_right), null, Modifier.size(16.dp), tint = Td.Ink) }
+                ) {
+                    Box(
+                        Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(Td.Bg),
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(painterResource(R.drawable.ic_chev_right), "下个月", Modifier.size(16.dp), tint = Td.Ink) }
+                }
             }
             Row {
                 for (w in listOf("一", "二", "三", "四", "五", "六", "日")) {
@@ -164,7 +218,9 @@ private fun CalendarCard(
             val cells: List<LocalDate?> = List(leading) { null } + (1..ym.lengthOfMonth()).map { ym.atDay(it) }
             cells.chunked(7).forEach { week ->
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    week.forEach { date -> DayCell(date, date?.let { cityDays[it] }, Modifier.weight(1f)) }
+                    week.forEach { date ->
+                        DayCell(date, date?.let { cityDays[it] }, Modifier.weight(1f), onDayClick)
+                    }
                     repeat(7 - week.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
@@ -187,9 +243,13 @@ private fun CalendarCard(
 }
 
 @Composable
-private fun DayCell(date: LocalDate?, day: CityDay?, modifier: Modifier) {
+private fun DayCell(date: LocalDate?, day: CityDay?, modifier: Modifier, onClick: (LocalDate) -> Unit) {
     val shape = RoundedCornerShape(10.dp)
-    val base = modifier.height(42.dp)
+    val base = if (date != null && day != null) {
+        modifier.height(42.dp).clip(shape).clickable { onClick(date) }
+    } else {
+        modifier.height(42.dp)
+    }
     val styled = when {
         date == null || day == null -> base
         day.weight >= 1.0 -> base.clip(shape).background(Td.AccentSoft)
@@ -241,7 +301,11 @@ private fun LegendSwatch(full: Boolean) {
 }
 
 @Composable
-private fun DetailListCard(cityDays: Map<LocalDate, CityDay>, punchesByDate: Map<LocalDate, List<Punch>>) {
+private fun DetailListCard(
+    cityDays: Map<LocalDate, CityDay>,
+    punchesByDate: Map<LocalDate, List<Punch>>,
+    onRowClick: (LocalDate) -> Unit,
+) {
     val dates = cityDays.keys.sortedDescending()
     TdCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 2.dp)) {
@@ -260,7 +324,7 @@ private fun DetailListCard(cityDays: Map<LocalDate, CityDay>, punchesByDate: Map
                 val e = punches.firstOrNull { it.slot == Slot.EVENING }
                 val x = punches.firstOrNull { it.slot == Slot.EXTRA }
                 Row(
-                    Modifier.fillMaxWidth().padding(vertical = 11.dp),
+                    Modifier.fillMaxWidth().clickable { onRowClick(date) }.padding(vertical = 11.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -268,21 +332,23 @@ private fun DetailListCard(cityDays: Map<LocalDate, CityDay>, punchesByDate: Map
                             "${date.monthValue}月${date.dayOfMonth}日 · ${weekCn(date)}",
                             fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.Ink,
                         )
+                        val detail = listOfNotNull(
+                            m?.let { it.epochMs to "早 ${punchClock(it)} ${it.cityName}" },
+                            e?.let { it.epochMs to "晚 ${punchClock(it)} ${it.cityName}" },
+                            x?.let { it.epochMs to "首 ${punchClock(it)} ${it.cityName}" },
+                        ).sortedBy { it.first }.joinToString(" · ") { it.second }
                         val sub = when {
-                            day.manual -> "手动补记"
-                            m == null && e == null && x == null -> "无打卡记录"
-                            else -> listOfNotNull(
-                                m?.let { it.epochMs to "早 ${punchClock(it)} ${it.cityName}" },
-                                e?.let { it.epochMs to "晚 ${punchClock(it)} ${it.cityName}" },
-                                x?.let { it.epochMs to "首 ${punchClock(it)} ${it.cityName}" },
-                            ).sortedBy { it.first }.joinToString(" · ") { it.second }
+                            day.manual && detail.isEmpty() -> "手动补记"
+                            day.manual -> "已手动更正 · 当天打卡:$detail"
+                            detail.isEmpty() -> "无打卡记录"
+                            else -> detail
                         }
                         Text(sub, fontSize = 12.sp, color = Td.Muted)
                     }
                     val (label, bg, fg) = when {
-                        day.manual -> Triple("补记", Td.WarmSoft, Td.WarmDeep)
+                        day.manual -> Triple("手动", Td.WarmSoft, Td.WarmDeep)
                         day.weight >= 1.0 -> Triple("全天", Td.AccentSoft, Td.AccentDeep)
-                        else -> Triple("半天", Td.WarmSoft, Td.WarmDeep)
+                        else -> Triple("半天", Td.AccentSoft, Td.AccentDeep)
                     }
                     Text(
                         label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = fg,

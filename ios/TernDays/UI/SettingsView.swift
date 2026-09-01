@@ -9,6 +9,10 @@ struct SettingsView: View {
     @State private var notifGranted: Bool?
     @State private var data: YearData?
     @State private var backfillOpen = false
+    @State private var scanOpen = false
+    @State private var importWorking: String?
+    @State private var importResult: String?
+    @State private var importResultTitle = ""
 
     private var year: Int { LocalDate.today().year }
 
@@ -43,7 +47,7 @@ struct SettingsView: View {
                     .padding(.horizontal, 16)
                 }
 
-                Text("手动补记").font(.system(size: 13, weight: .medium)).foregroundColor(Td.muted)
+                Text("手动补记与更正").font(.system(size: 13, weight: .medium)).foregroundColor(Td.muted)
                     .padding(.leading, 2).padding(.top, 4)
                 TdCard {
                     VStack(spacing: 0) {
@@ -57,19 +61,24 @@ struct SettingsView: View {
                                 }
                                 Spacer()
                                 Image(systemName: "chevron.right")
-                                    .font(.system(size: 13)).foregroundColor(Color(hex: 0xC3CCD4))
+                                    .font(.system(size: 13)).foregroundColor(Td.chevron)
                             }
                             .padding(.vertical, 14)
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        Divider().overlay(Td.divider)
+                        Text("记录的城市不对？在首页「今日打卡」点「纠正」，或到城市详情里点那一天即可更正")
+                            .font(.system(size: 12)).foregroundColor(Td.muted)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 12)
                         ForEach(data?.overrides.sorted(by: { $0.localDate > $1.localDate }) ?? [], id: \.localDate) { o in
                             Divider().overlay(Td.divider)
                             HStack {
-                                Text("\(o.localDate.month)月\(o.localDate.day)日 → \(o.cityName)")
+                                Text("\(o.localDate.month)月\(o.localDate.day)日 → \(o.cityName)（手动）")
                                     .font(.system(size: 13)).foregroundColor(Td.ink)
                                 Spacer()
-                                Button("删除") {
+                                Button("恢复自动") {
                                     DataStore.shared.removeOverride(date: o.localDate)
                                     WidgetCenter.shared.reloadAllTimelines()
                                     reload()
@@ -78,6 +87,25 @@ struct SettingsView: View {
                             }
                             .padding(.vertical, 10)
                         }
+                    }
+                    .padding(.horizontal, 16)
+                }
+
+                Text("换手机").font(.system(size: 13, weight: .medium)).foregroundColor(Td.muted)
+                    .padding(.leading, 2).padding(.top, 4)
+                TdCard {
+                    VStack(spacing: 0) {
+                        NavigationLink {
+                            MigrateSendView()
+                        } label: {
+                            migrateRow("迁移到新手机", "本机是旧手机:展示二维码,让新手机扫码接收全部数据")
+                        }
+                        .buttonStyle(.plain)
+                        Divider().overlay(Td.divider)
+                        Button { scanOpen = true } label: {
+                            migrateRow("从旧手机导入", "本机是新手机:扫旧手机上的二维码,数据经加密局域网直传")
+                        }
+                        .buttonStyle(.plain)
                     }
                     .padding(.horizontal, 16)
                 }
@@ -108,6 +136,62 @@ struct SettingsView: View {
         .navigationTitle("设置")
         .navigationBarTitleDisplayMode(.inline)
         .task { reload() }
+        .onReceive(NotificationCenter.default.publisher(for: .terndaysDataChanged)) { _ in reload() }
+        .sheet(isPresented: $scanOpen) {
+            MigrateScanView { code in
+                scanOpen = false
+                guard let link = MigrationLink.parse(code) else {
+                    importResultTitle = "导入没有成功"
+                    importResult = "这不是 TernDays 的迁移二维码"
+                    return
+                }
+                importWorking = "正在连接旧手机…"
+                MigrateImportClient.run(
+                    link: link,
+                    onStatus: { msg in importWorking = msg },
+                    onDone: { outcome in
+                        importWorking = nil
+                        importResultTitle = "导入完成 ✓"
+                        let r = outcome.result
+                        var text = "新增 \(r.punchesAdded) 条打卡、\(r.overridesAdded) 条手动记录"
+                        if r.punchesSkipped + r.overridesSkipped > 0 {
+                            text += ";本机已有的 \(r.punchesSkipped + r.overridesSkipped) 条保持不变"
+                        }
+                        if outcome.remapped > 0 {
+                            text += "\n已按本机城市库修正 \(outcome.remapped) 条城市判定"
+                        }
+                        importResult = text
+                        reload()
+                    },
+                    onError: { msg in
+                        importWorking = nil
+                        importResultTitle = "导入没有成功"
+                        importResult = msg
+                    }
+                )
+            }
+        }
+        .overlay {
+            if let msg = importWorking {
+                ZStack {
+                    Color.black.opacity(0.35).ignoresSafeArea()
+                    VStack(spacing: 14) {
+                        ProgressView()
+                        Text(msg).font(.system(size: 13)).foregroundColor(Td.muted)
+                    }
+                    .padding(28)
+                    .background(RoundedRectangle(cornerRadius: 16).fill(Td.surface))
+                }
+            }
+        }
+        .alert(importResultTitle, isPresented: .init(
+            get: { importResult != nil },
+            set: { if !$0 { importResult = nil } }
+        )) {
+            Button("好") { importResult = nil }
+        } message: {
+            Text(importResult ?? "")
+        }
         .sheet(isPresented: $backfillOpen) {
             BackfillSheet(
                 unrecorded: data?.stats.unrecordedDates.sorted(by: >) ?? [],
@@ -154,6 +238,21 @@ struct SettingsView: View {
         .buttonStyle(.plain)
     }
 
+    private func migrateRow(_ title: String, _ sub: String) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 14, weight: .semibold)).foregroundColor(Td.ink)
+                Text(sub).font(.system(size: 12)).foregroundColor(Td.muted)
+                    .multilineTextAlignment(.leading)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13)).foregroundColor(Td.chevron)
+        }
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
+    }
+
     private func aboutLine(_ label: String, _ value: String) -> some View {
         HStack(alignment: .top) {
             Text(label).font(.system(size: 12)).foregroundColor(Td.faint).frame(width: 64, alignment: .leading)
@@ -170,19 +269,32 @@ struct BackfillSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var pickedDate: LocalDate?
     @State private var query = ""
+    @State private var hits: [CityMatcher.SearchHit] = []
 
     var body: some View {
         NavigationStack {
             List {
                 if let date = pickedDate {
                     Section("补记 \(date.month)月\(date.day)日 在哪个城市？") {
-                        TextField("搜索城市名", text: $query)
-                        let options = query.isEmpty
-                            ? recentCities
-                            : Cities.matcher.search(name: query, limit: 12).map { ($0.key, $0.name) }
-                        ForEach(options, id: \.0) { key, name in
-                            Button(name) { onConfirm(date, key, name) }
-                                .foregroundColor(Td.ink)
+                        TextField("搜索城市名（支持拼音）", text: $query)
+                        if query.isEmpty {
+                            ForEach(recentCities, id: \.0) { key, name in
+                                Button(name) { onConfirm(date, key, name) }
+                                    .foregroundColor(Td.ink)
+                            }
+                        } else {
+                            ForEach(hits, id: \.cityKey) { hit in
+                                Button {
+                                    onConfirm(date, hit.cityKey, hit.cityName)
+                                } label: {
+                                    HStack {
+                                        Text(hit.cityName).foregroundColor(Td.ink)
+                                        if !hit.region.isEmpty {
+                                            Text(hit.region).font(.system(size: 12)).foregroundColor(Td.faint)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 } else {
@@ -196,6 +308,14 @@ struct BackfillSheet: View {
                         }
                     }
                 }
+            }
+            .task(id: query) {
+                let q = query
+                guard !q.isEmpty else { hits = []; return }
+                let found = await Task.detached(priority: .userInitiated) {
+                    Cities.matcher.searchHits(q, limit: 12)
+                }.value
+                if q == query { hits = found }
             }
             .navigationTitle("手动补记")
             .navigationBarTitleDisplayMode(.inline)

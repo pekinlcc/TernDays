@@ -1,8 +1,10 @@
 import SwiftUI
+import WidgetKit
 
 struct HomeView: View {
     @State private var year = LocalDate.today().year
     @State private var data: YearData?
+    @State private var correctingToday = false
     @ObservedObject private var punch = PunchManager.shared
 
     private var today: LocalDate { LocalDate.today() }
@@ -69,6 +71,28 @@ struct HomeView: View {
         }
         .task(id: year) { reload() }
         .onReceive(NotificationCenter.default.publisher(for: .terndaysDataChanged)) { _ in reload() }
+        .sheet(isPresented: $correctingToday) {
+            let todayPunches = data?.punches.filter { $0.localDate == today } ?? []
+            CityCorrectSheet(
+                date: today,
+                currentCityName: data?.stats.days[today]?.shares.map(\.cityName).joined(separator: " + "),
+                recentCities: data?.stats.cities.map { ($0.cityKey, $0.cityName) } ?? [],
+                hasOverride: data?.overrides.contains { $0.localDate == today } ?? false,
+                hasBothHalves: todayPunches.contains { $0.slot == .morning } && todayPunches.contains { $0.slot == .evening },
+                onPick: { key, name, scope in
+                    DataStore.shared.setOverride(DayOverride(localDate: today, cityKey: key, cityName: name, scope: scope))
+                    WidgetCenter.shared.reloadAllTimelines()
+                    correctingToday = false
+                    reload()
+                },
+                onRestoreAuto: {
+                    DataStore.shared.removeOverride(date: today)
+                    WidgetCenter.shared.reloadAllTimelines()
+                    correctingToday = false
+                    reload()
+                }
+            )
+        }
     }
 
     private func reload() {
@@ -106,8 +130,12 @@ struct HomeView: View {
                     bigStat(value: data.map { String($0.stats.cities.count) } ?? "–", label: "个城市")
                     Spacer()
                     if let missing = data?.stats.unrecordedDates.count, missing > 0 {
-                        Text("另有 \(missing) 天无记录")
-                            .font(.system(size: 11)).foregroundColor(Td.faint)
+                        // 可点:跳设置去补记(与 Android 一致)
+                        NavigationLink(value: "settings") {
+                            Text("另有 \(missing) 天可补记")
+                                .font(.system(size: 11, weight: .medium)).foregroundColor(Td.accentDeep)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -127,10 +155,20 @@ struct HomeView: View {
         let morning = punches.first { $0.slot == .morning }
         let evening = punches.first { $0.slot == .evening }
         let extra = punches.first { $0.slot == .extra }
+        let hasToday = !punches.isEmpty || data?.stats.days[today] != nil
         return TdCard {
             VStack(alignment: .leading, spacing: 10) {
-                Text("今日打卡 · \(today.month)月\(today.day)日 \(today.weekdayCn)")
-                    .font(.system(size: 12)).foregroundColor(Td.muted)
+                HStack {
+                    Text("今日打卡 · \(today.month)月\(today.day)日 \(today.weekdayCn)")
+                        .font(.system(size: 12)).foregroundColor(Td.muted)
+                    Spacer()
+                    if hasToday {
+                        // 定位/城市库偶有边界误判（如深圳被判成香港），提供一键人工更正
+                        Button("纠正") { correctingToday = true }
+                            .font(.system(size: 12, weight: .semibold)).foregroundColor(Td.accentDeep)
+                            .buttonStyle(.plain)
+                    }
+                }
                 HStack(spacing: 0) {
                     punchCell(icon: "sun.max", tint: Color(hex: 0xA9762F), label: "早 · 07:00", punch: morning)
                     Rectangle().fill(Td.border).frame(width: 1, height: 40)
@@ -194,7 +232,7 @@ struct HomeView: View {
                                 Text("天").font(.system(size: 11)).foregroundColor(Td.faint)
                             }
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 13, weight: .semibold)).foregroundColor(Color(hex: 0xC3CCD4))
+                                .font(.system(size: 13, weight: .semibold)).foregroundColor(Td.chevron)
                         }
                         .padding(.vertical, 14)
                         .contentShape(Rectangle())
