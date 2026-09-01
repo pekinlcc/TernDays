@@ -59,17 +59,17 @@ jobs:
           name: terndays-apk
           path: TernDays-${{ steps.ver.outputs.version }}.apk
 
-      - name: Repair v0.1 tag target (one-off)
-        if: steps.ver.outputs.release == 'v0.1.1'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Repair v0.1 tag target (no-op once fixed)
         run: |
-          # v0.1 发布时 tag 被打在默认分支初始提交上，这里修正为当时构建的提交
-          curl -sS -X PATCH \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/refs/tags/v0.1" \
-            -d '{"sha":"600327bfd2356f50b66308015ef9e5796356d6ca","force":true}' | head -5
+          # v0.1 发布时 tag 被 API 打在默认分支初始提交上；修正为当时构建的提交后此步骤恒为 no-op
+          WANT=600327bfd2356f50b66308015ef9e5796356d6ca
+          CUR=$(git ls-remote origin refs/tags/v0.1 | cut -f1)
+          if [ -n "$CUR" ] && [ "$CUR" != "$WANT" ]; then
+            git fetch --depth=1 origin "$WANT"
+            git push --force origin "$WANT:refs/tags/v0.1"
+          else
+            echo "v0.1 tag OK ($CUR)"
+          fi
 
       - name: Publish GitHub Release
         if: steps.ver.outputs.release != ''
