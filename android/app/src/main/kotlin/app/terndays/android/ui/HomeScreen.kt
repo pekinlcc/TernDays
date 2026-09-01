@@ -83,7 +83,7 @@ fun HomeScreen(
                 Modifier.size(32.dp).clip(RoundedCornerShape(9.dp)).background(Td.Accent),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(painterResource(R.drawable.ic_pin), null, Modifier.size(18.dp), tint = Color.White)
+                Icon(painterResource(R.drawable.ic_tern), null, Modifier.size(22.dp), tint = Color.White)
             }
             Spacer(Modifier.width(10.dp))
             Text("TernDays", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = Td.Ink)

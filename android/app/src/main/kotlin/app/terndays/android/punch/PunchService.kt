@@ -181,7 +181,7 @@ class PunchService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         return NotificationCompat.Builder(this, TernDaysApp.CHANNEL_PUNCH)
-            .setSmallIcon(R.drawable.ic_stat_pin)
+            .setSmallIcon(R.drawable.ic_stat_tern)
             .setContentTitle("正在记录当前城市…")
             .setContentIntent(pi)
             .setOngoing(true)
@@ -194,7 +194,7 @@ class PunchService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val n = NotificationCompat.Builder(this, TernDaysApp.CHANNEL_REMIND)
-            .setSmallIcon(R.drawable.ic_stat_pin)
+            .setSmallIcon(R.drawable.ic_stat_tern)
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
@@ -236,7 +236,7 @@ class PunchService : Service() {
                 nm.notify(
                     NOTIF_REMIND_ID,
                     NotificationCompat.Builder(context, TernDaysApp.CHANNEL_REMIND)
-                        .setSmallIcon(R.drawable.ic_stat_pin)
+                        .setSmallIcon(R.drawable.ic_stat_tern)
                         .setContentTitle("打卡被系统拦下了")
                         .setContentText("点这里打开应用完成打卡，并在设置中开启自启动/后台运行")
                         .setContentIntent(pi)
