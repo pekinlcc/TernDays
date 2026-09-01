@@ -2,6 +2,7 @@ import BackgroundTasks
 import CoreLocation
 import Foundation
 import UserNotifications
+import WidgetKit
 
 /// iOS 打卡策略（系统不允许后台精确定时任务，组合多路兜底）：
 ///  1. 显著位置变化（SLC）：系统在设备明显移动时唤醒应用，若正处打卡窗口且缺记录则就地记录
@@ -112,6 +113,7 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
             fromCache: fromCache
         )
         DataStore.shared.insertPunch(punch)
+        WidgetCenter.shared.reloadAllTimelines()
         NotificationCenter.default.post(name: .terndaysDataChanged, object: nil)
     }
 

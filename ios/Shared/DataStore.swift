@@ -1,6 +1,13 @@
 import Foundation
 
-/// 本地存储：punches.json / overrides.json（Application Support），串行队列保护。
+/// 主应用与桌面小组件共享数据的 App Group。
+/// 修改 Bundle ID 时同步调整，并在 Xcode 里给两个 target 都开启该 App Group capability。
+enum AppGroup {
+    static let id = "group.app.terndays"
+}
+
+/// 本地存储：punches.json / overrides.json，串行队列保护。
+/// 优先存放在 App Group 容器（小组件可读）；未配置 App Group 时退回应用沙盒。
 final class DataStore {
     static let shared = DataStore()
 
@@ -13,9 +20,18 @@ final class DataStore {
     private var overridesURL: URL { dir.appendingPathComponent("overrides.json") }
 
     private init() {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        dir = base.appendingPathComponent("TernDays", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fm = FileManager.default
+        let legacy = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("TernDays", isDirectory: true)
+        if let group = fm.containerURL(forSecurityApplicationGroupIdentifier: AppGroup.id) {
+            dir = group.appendingPathComponent("TernDays", isDirectory: true)
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            Self.migrate(from: legacy, to: dir)
+        } else {
+            // App Group 未配置（例如自定义签名时没开 capability）：应用可用，但小组件读不到数据
+            dir = legacy
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
         if let d = try? Data(contentsOf: punchesURL),
            let list = try? JSONDecoder().decode([Punch].self, from: d) {
             punches = list
@@ -23,6 +39,18 @@ final class DataStore {
         if let d = try? Data(contentsOf: overridesURL),
            let list = try? JSONDecoder().decode([DayOverride].self, from: d) {
             overrides = list
+        }
+    }
+
+    /// 老版本（v0.1）数据写在应用沙盒；启用 App Group 后做一次性搬迁
+    private static func migrate(from old: URL, to new: URL) {
+        let fm = FileManager.default
+        for name in ["punches.json", "overrides.json"] {
+            let src = old.appendingPathComponent(name)
+            let dst = new.appendingPathComponent(name)
+            if fm.fileExists(atPath: src.path) && !fm.fileExists(atPath: dst.path) {
+                try? fm.copyItem(at: src, to: dst)
+            }
         }
     }
 

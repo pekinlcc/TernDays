@@ -193,6 +193,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                                         "删除", fontSize = 12.sp, color = Td.WarmDeep,
                                         modifier = Modifier.clickable {
                                             PunchDb.get(context).removeOverride(o.localDate)
+                                            app.terndays.android.widget.TernDaysWidgetProvider.updateAll(context)
                                             tick++
                                         },
                                     )
@@ -230,6 +231,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             onDismiss = { backfillOpen = false },
             onConfirm = { date, key, name ->
                 PunchDb.get(context).setOverride(DayOverride(date, key, name))
+                app.terndays.android.widget.TernDaysWidgetProvider.updateAll(context)
                 backfillOpen = false
                 tick++
             },

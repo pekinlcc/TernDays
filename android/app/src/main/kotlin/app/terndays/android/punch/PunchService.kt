@@ -164,6 +164,7 @@ class PunchService : Service() {
                     fromCache = fromCache,
                 )
                 PunchDb.get(this).insertPunch(punch)
+                app.terndays.android.widget.TernDaysWidgetProvider.updateAll(this)
             } finally {
                 handler.post { finish() }
             }

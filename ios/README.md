@@ -6,10 +6,13 @@ SwiftUI 实现，与 Android 版共用同一套计天算法、离线城市库（
 
 ## 构建
 
-1. 需要 macOS + **Xcode 16 及以上**（工程使用了新的目录同步格式，Xcode 会自动纳入 `TernDays/` 下的全部源码与资源）
-2. 打开 `ios/TernDays.xcodeproj`
-3. 在 Signing & Capabilities 里选择你自己的开发者 Team（Bundle ID 默认 `app.terndays.ios`，可改）
-4. 连接 iPhone，Run
+1. 需要 macOS + **Xcode 16 及以上**（工程使用了新的目录同步格式，Xcode 会自动纳入各目录下的全部源码与资源）
+2. 打开 `ios/TernDays.xcodeproj`（含两个 target：主应用 `TernDays` 与桌面小组件 `TernDaysWidget`）
+3. 在 Signing & Capabilities 里给**两个 target** 选择你自己的开发者 Team（Bundle ID 默认 `app.terndays.ios` / `app.terndays.ios.widget`，可改）
+4. 两个 target 都已声明 App Group `group.app.terndays`（小组件读取打卡数据用）。
+   首次签名时 Xcode 会自动注册该 App Group；若改了 Bundle ID，请把 `Shared/DataStore.swift`
+   里的 `AppGroup.id`、两个 `.entitlements` 文件一起改成你自己的组名
+5. 连接 iPhone，Run（长按桌面 → 添加小组件 → TernDays）
 
 ## iOS 的打卡策略（与 Android 的差异）
 
@@ -28,10 +31,14 @@ iOS 不允许应用在后台精确定时执行任务，因此打卡通过多路�
 ## 目录结构
 
 ```
+Shared/           两个 target 共用：数据模型、计天算法、打卡窗口规则、存储（App Group 容器，
+                  未配置 App Group 时退回沙盒并自动迁移旧数据）
 TernDays/
-  Core/       计天算法、打卡窗口规则、离线城市匹配、CSV/XLSX 导出（与 android/core 逐一对应）
-  Data/       本地 JSON 存储、城市库加载
-  Punch/      PunchManager：定位权限、SLC、BGTask、本地通知
-  UI/         首页 / 城市日历详情 / 导出 / 设置(补记) / 引导
-  cities.tsv  离线城市库（tools/build_city_dataset.py 生成）
+  Core/           离线城市匹配、CSV/XLSX 导出
+  Data/           城市库加载
+  Punch/          PunchManager：定位权限、SLC、BGTask、本地通知、小组件刷新
+  UI/             首页 / 城市日历详情 / 导出 / 设置(补记) / 引导
+  cities.tsv      离线城市库（tools/build_city_dataset.py 生成）
+TernDaysWidget/   桌面小组件（small：天数+今日状态；medium：另加 Top 3 城市），
+                  打卡/补记后即时刷新，其余时刻在下一个打卡时间点后自动刷新
 ```

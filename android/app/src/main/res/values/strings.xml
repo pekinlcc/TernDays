@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">TernDays</string>
+    <string name="widget_desc">年度城市天数一览：已记录天数、今日打卡状态与去过最久的城市</string>
+    <string name="widget_empty">还没有打卡记录</string>
 </resources>

@@ -2,6 +2,7 @@ import CoreLocation
 import SwiftUI
 import UIKit
 import UserNotifications
+import WidgetKit
 
 struct SettingsView: View {
     @ObservedObject private var punch = PunchManager.shared
@@ -66,6 +67,7 @@ struct SettingsView: View {
                                 Spacer()
                                 Button("删除") {
                                     DataStore.shared.removeOverride(date: o.localDate)
+                                    WidgetCenter.shared.reloadAllTimelines()
                                     reload()
                                 }
                                 .font(.system(size: 12)).foregroundColor(Td.warmDeep)
@@ -101,6 +103,7 @@ struct SettingsView: View {
                 recentCities: data?.stats.cities.map { ($0.cityKey, $0.cityName) } ?? []
             ) { date, key, name in
                 DataStore.shared.setOverride(DayOverride(localDate: date, cityKey: key, cityName: name))
+                WidgetCenter.shared.reloadAllTimelines()
                 backfillOpen = false
                 reload()
             }

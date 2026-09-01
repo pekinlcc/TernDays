@@ -15,6 +15,7 @@ class BootReceiver : BroadcastReceiver() {
             -> {
                 PunchScheduler.scheduleNext(context)
                 PunchService.maybeBackfill(context)
+                app.terndays.android.widget.TernDaysWidgetProvider.updateAll(context)
             }
             Intent.ACTION_TIMEZONE_CHANGED,
             Intent.ACTION_TIME_CHANGED,
