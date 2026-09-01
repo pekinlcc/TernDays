@@ -23,6 +23,13 @@ Known limitation (v0.1): near prefecture borders a point can snap to the
 neighbouring city (e.g. 燕郊 → 北京). Raw coordinates are stored by the apps so
 history can be re-resolved by future dataset/algorithm upgrades.
 
+v0.5: fixed severe border skew around 深港/珠澳 — the old HK/MO rescue *boxes*
+swallowed Shenzhen land points (蛇口/前海 → 香港), and anchor density was wildly
+asymmetric (HK 146 points vs 深圳 14, 珠海 1), so nearest-neighbour misjudged
+even 深圳湾口岸/罗湖口岸/拱北. Rescue is now by comparing distance to native
+HK/MO points vs CN anchors, and hand-curated border anchors (EXTRA_*_ANCHORS)
+pin both sides of the boundary. Verified by 32 border probes + 12 regressions.
+
 Usage: python3 tools/build_city_dataset.py <output.tsv>
 """
 import json
@@ -139,13 +146,49 @@ def haversine(lat1, lng1, lat2, lng2):
     return 6371.0 * 2 * math.asin(math.sqrt(a))
 
 
-# GeoNames 把部分澳门堂区/香港街区标成 CN；未匹配的 CN 点若落在这些框内则归还
-MACAU_BOX = (22.06, 22.24, 113.51, 113.62)   # latmin, latmax, lngmin, lngmax
-HK_BOX = (22.13, 22.53, 113.83, 114.45)
+# 边界敏感城市的手工锚点：GeoNames 对香港街区逐一建点（146 个）而深圳只有市中心
+# 十几个点、珠海仅 1 个，最近邻分界线会深压进内地一侧（曾把蛇口/前海/罗湖口岸判成
+# 香港、拱北/横琴判成澳门、深圳机场判成东莞）。补齐口岸/边界侧区镇锚点拉回分界线。
+EXTRA_CN_ANCHORS = [
+    # 深圳（深港边界从深圳湾到沙头角，加西部机场带与东部大鹏半岛）
+    ("深圳", 22.480, 113.916), ("深圳", 22.513, 113.935), ("深圳", 22.510, 113.943),
+    ("深圳", 22.535, 113.890), ("深圳", 22.520, 114.067), ("深圳", 22.526, 114.057),
+    ("深圳", 22.533, 114.115), ("深圳", 22.554, 114.150), ("深圳", 22.553, 114.161),
+    ("深圳", 22.554, 114.229),
+    ("深圳", 22.558, 114.236), ("深圳", 22.595, 114.310), ("深圳", 22.591, 114.330),
+    ("深圳", 22.628, 114.418), ("深圳", 22.588, 114.476), ("深圳", 22.531, 114.505),
+    ("深圳", 22.480, 114.520), ("深圳", 22.639, 113.814), ("深圳", 22.674, 113.807),
+    ("深圳", 22.735, 113.814), ("深圳", 22.766, 113.848), ("深圳", 22.749, 113.917),
+    ("深圳", 22.657, 114.036), ("深圳", 22.720, 114.058), ("深圳", 22.690, 114.130),
+    ("深圳", 22.610, 114.110), ("深圳", 22.640, 114.200), ("深圳", 22.690, 114.350),
+    ("深圳", 22.700, 114.405),
+    # 珠海（珠澳边界拱北—湾仔—横琴，加西部金湾/斗门）
+    ("珠海", 22.268, 113.544), ("珠海", 22.228, 113.548), ("珠海", 22.222, 113.552),
+    ("珠海", 22.225, 113.517),
+    ("珠海", 22.252, 113.520), ("珠海", 22.240, 113.500), ("珠海", 22.130, 113.520),
+    ("珠海", 22.130, 113.543), ("珠海", 22.155, 113.535),
+    ("珠海", 22.102, 113.529), ("珠海", 22.146, 113.545), ("珠海", 22.360, 113.600),
+    ("珠海", 22.340, 113.570), ("珠海", 22.008, 113.377), ("珠海", 22.040, 113.410),
+    ("珠海", 22.120, 113.320), ("珠海", 22.210, 113.285), ("珠海", 22.230, 113.320),
+    ("珠海", 22.055, 113.290),
+    # 东莞南部（与深圳宝安接壤，防止长安/滨海湾被新增的深圳锚点吸走）
+    ("东莞", 22.804, 113.807), ("东莞", 22.786, 113.746), ("东莞", 22.820, 113.860),
+]
 
-
-def in_box(lat, lng, box):
-    return box[0] <= lat <= box[1] and box[2] <= lng <= box[3]
+# 港澳一侧同样补口岸/边界锚点（GeoNames 街区点集中在市区，口岸带稀疏），
+# 让深圳河/关闸两侧各有近锚，分界线落回真实边界线
+EXTRA_HKMO_ANCHORS = [
+    ("HK:香港", "香港", 22.511, 114.066),  # 落马洲管制站
+    ("HK:香港", "香港", 22.528, 114.117),  # 罗湖站
+    ("HK:香港", "香港", 22.529, 114.129),  # 文锦渡（港侧）
+    ("HK:香港", "香港", 22.546, 114.164),  # 香园围口岸
+    ("HK:香港", "香港", 22.545, 114.222),  # 沙头角（港侧）
+    ("HK:香港", "香港", 22.487, 114.005),  # 尖鼻咀（深圳湾对岸）
+    ("MO:澳门", "澳门", 22.213, 113.549),  # 关闸
+    ("MO:澳门", "澳门", 22.158, 113.560),  # 氹仔
+    ("MO:澳门", "澳门", 22.144, 113.565),  # 路氹城
+    ("MO:澳门", "澳门", 22.109, 113.557),  # 路环
+]
 
 
 def cluster_foreign(entries):
@@ -187,6 +230,7 @@ def main(out_path: str):
 
     rows = []
     cn_matched, cn_unmatched, foreign = [], [], []
+    hkmo_native = []  # 原生 HK/MO 点，供未匹配 CN 点的边界救援比较
 
     for c in cities:
         cc, lat, lng, names = c["countrycode"], c["latitude"], c["longitude"], c["alternatenames"]
@@ -211,8 +255,10 @@ def main(out_path: str):
                 cn_unmatched.append((lat, lng, None, c))
         elif cc == "HK":
             rows.append((lat, lng, "HK:香港", "香港"))
+            hkmo_native.append((lat, lng, "HK:香港", "香港"))
         elif cc == "MO":
             rows.append((lat, lng, "MO:澳门", "澳门"))
+            hkmo_native.append((lat, lng, "MO:澳门", "澳门"))
         else:
             foreign.append(c)
 
@@ -233,21 +279,32 @@ def main(out_path: str):
             kept.append([lat, lng, pref, by_stem])
     cn_matched = kept
 
-    # 未匹配 CN 点：先做港澳矩形救援，再按最近已匹配点归属地级市
+    # 手工锚点先入列，参与后续未匹配点的吸附
+    for pref, lat, lng in EXTRA_CN_ANCHORS:
+        cn_matched.append([lat, lng, pref, False])
+    for key, disp, lat, lng in EXTRA_HKMO_ANCHORS:
+        rows.append((lat, lng, key, disp))
+        hkmo_native.append((lat, lng, key, disp))
+
+    # 未匹配 CN 点：GeoNames 把部分港澳街区/堂区标成 CN，先比较「最近原生 HK/MO 点」
+    # 与「最近内地锚点」谁更近来救援（比矩形框贴合真实边界，不会吞掉蛇口/前海等
+    # 深圳陆地点），再按最近已匹配点归属地级市
     anchors = [(lat, lng, pref) for lat, lng, pref, _ in cn_matched]
     dropped = 0
     for lat, lng, stem_pref, c in cn_unmatched:
-        if in_box(lat, lng, MACAU_BOX):
-            rows.append((lat, lng, "MO:澳门", "澳门"))
-            continue
-        if in_box(lat, lng, HK_BOX):
-            rows.append((lat, lng, "HK:香港", "香港"))
-            continue
         best, bestd = None, 1e18
         for mlat, mlng, pref in anchors:
             d = haversine(lat, lng, mlat, mlng)
             if d < bestd:
                 bestd, best = d, pref
+        hbest, hbestd = None, 1e18
+        for hlat, hlng, key, disp in hkmo_native:
+            d = haversine(lat, lng, hlat, hlng)
+            if d < hbestd:
+                hbestd, hbest = d, (key, disp)
+        if hbest is not None and hbestd < bestd and hbestd <= 25:
+            rows.append((lat, lng, hbest[0], hbest[1]))
+            continue
         if best is not None and bestd <= 120:
             cn_matched.append([lat, lng, best, False])
         elif stem_pref:

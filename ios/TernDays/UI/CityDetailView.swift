@@ -1,4 +1,5 @@
 import SwiftUI
+import WidgetKit
 
 struct CityDetailView: View {
     let cityKey: String
@@ -6,6 +7,7 @@ struct CityDetailView: View {
 
     @State private var data: YearData?
     @State private var month = 0
+    @State private var correcting: CorrectTarget?
 
     private struct CityDay {
         let weight: Double
@@ -44,7 +46,7 @@ struct CityDetailView: View {
                 HStack {
                     Text("打卡明细").font(.system(size: 13, weight: .medium)).foregroundColor(Td.muted)
                     Spacer()
-                    Text("最近在前").font(.system(size: 11)).foregroundColor(Td.faint)
+                    Text("点一天可更正城市").font(.system(size: 11)).foregroundColor(Td.faint)
                 }
                 .padding(.horizontal, 2)
 
@@ -66,6 +68,29 @@ struct CityDetailView: View {
                 month = latest?.month ?? (year == LocalDate.today().year ? LocalDate.today().month : 12)
             }
         }
+        .sheet(item: $correcting) { target in
+            CityCorrectSheet(
+                date: target.date,
+                currentCityName: data?.stats.days[target.date]?.shares.map(\.cityName).joined(separator: " + "),
+                recentCities: data?.stats.cities.map { ($0.cityKey, $0.cityName) } ?? [],
+                hasOverride: data?.overrides.contains { $0.localDate == target.date } ?? false,
+                onPick: { key, name in
+                    DataStore.shared.setOverride(DayOverride(localDate: target.date, cityKey: key, cityName: name))
+                    afterCorrection()
+                },
+                onRestoreAuto: {
+                    DataStore.shared.removeOverride(date: target.date)
+                    afterCorrection()
+                }
+            )
+        }
+    }
+
+    private func afterCorrection() {
+        WidgetCenter.shared.reloadAllTimelines()
+        NotificationCenter.default.post(name: .terndaysDataChanged, object: nil)
+        correcting = nil
+        data = YearData.load(year: year)
     }
 
     private func calendarCard(days: [LocalDate: CityDay]) -> some View {
@@ -91,7 +116,13 @@ struct CityDetailView: View {
                     (1...count).map { LocalDate(year: year, month: month, day: $0) }
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 7), spacing: 4) {
                     ForEach(0..<cells.count, id: \.self) { i in
-                        dayCell(date: cells[i], day: cells[i].flatMap { days[$0] })
+                        let date = cells[i]
+                        let day = date.flatMap { days[$0] }
+                        dayCell(date: date, day: day)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if let date, day != nil { correcting = CorrectTarget(date: date) }
+                            }
                     }
                 }
                 HStack(spacing: 6) {
@@ -195,6 +226,8 @@ struct CityDetailView: View {
                         }
                     }
                     .padding(.vertical, 11)
+                    .contentShape(Rectangle())
+                    .onTapGesture { correcting = CorrectTarget(date: date) }
                 }
             }
             .padding(.horizontal, 16)

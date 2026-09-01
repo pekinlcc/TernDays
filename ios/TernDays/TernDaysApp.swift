@@ -15,6 +15,8 @@ struct TernDaysApp: App {
             if phase == .active && onboardingDone {
                 PunchManager.shared.punchIfNeeded()
                 PunchManager.shared.scheduleBackgroundRefresh()
+                // 城市库升级后，用原始坐标自动修正历史误判（如深圳被判成香港）
+                Cities.reResolveHistoryIfNeeded()
             }
         }
     }

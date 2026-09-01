@@ -35,6 +35,29 @@ class CityMatcher private constructor(
         return Match(keys[best], names[best], bestD)
     }
 
+    /** 按城市去重的前 k 个最近候选（每城取其最近点位），距离升序。供边界交叉验证用。 */
+    fun nearestByCity(lat: Double, lng: Double, k: Int = 3): List<Match> {
+        if (lats.isEmpty() || k <= 0) return emptyList()
+        val cand = ArrayList<Match>(k + 1)
+        for (i in lats.indices) {
+            val d = haversineKm(lat, lng, lats[i], lngs[i])
+            val worst = if (cand.size < k) Double.MAX_VALUE else cand.last().distanceKm
+            if (d >= worst) continue
+            val existing = cand.indexOfFirst { it.cityKey == keys[i] }
+            if (existing >= 0) {
+                if (d < cand[existing].distanceKm) {
+                    cand[existing] = Match(keys[i], names[i], d)
+                    cand.sortBy { it.distanceKm }
+                }
+            } else {
+                cand.add(Match(keys[i], names[i], d))
+                cand.sortBy { it.distanceKm }
+                if (cand.size > k) cand.removeAt(cand.size - 1)
+            }
+        }
+        return cand
+    }
+
     /** 手动补记时按名称搜索（去重后的城市列表，最多 limit 个）。 */
     fun searchByName(query: String, limit: Int = 20): List<Pair<String, String>> {
         val q = query.trim()

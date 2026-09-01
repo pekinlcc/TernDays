@@ -61,4 +61,33 @@ class CityDatasetTest {
         val hits = matcher.searchByName("杭州")
         assertTrue(hits.any { it.second == "杭州" }, "搜索『杭州』无结果")
     }
+
+    /** 深港/珠澳边界回归：v0.4 前救援框吞点 + 锚点密度失衡曾把深圳判成香港。 */
+    @Test
+    fun `深港珠澳边界两侧判定正确`() {
+        val cases = listOf(
+            // 深圳侧
+            Triple(22.4819, 113.9160, "深圳"),  // 蛇口
+            Triple(22.5280, 113.8930, "深圳"),  // 前海
+            Triple(22.5080, 113.9430, "深圳"),  // 深圳湾口岸
+            Triple(22.5185, 114.0670, "深圳"),  // 福田口岸
+            Triple(22.5320, 114.1130, "深圳"),  // 罗湖口岸
+            Triple(22.5570, 114.2370, "深圳"),  // 盐田港
+            Triple(22.6395, 113.8145, "深圳"),  // 宝安机场
+            // 香港侧
+            Triple(22.5110, 114.0655, "香港"),  // 落马洲
+            Triple(22.5010, 114.1280, "香港"),  // 上水
+            Triple(22.4445, 114.0225, "香港"),  // 元朗
+            Triple(22.3908, 113.9725, "香港"),  // 屯门
+            // 珠澳
+            Triple(22.2200, 113.5520, "珠海"),  // 拱北口岸广场
+            Triple(22.1300, 113.5450, "珠海"),  // 横琴东岸
+            Triple(22.2130, 113.5490, "澳门"),  // 关闸
+            Triple(22.1460, 113.5590, "澳门"),  // 路氹城
+        )
+        for ((lat, lng, expected) in cases) {
+            val m = matcher.nearest(lat, lng)!!
+            assertEquals(expected, m.cityName, "($lat, $lng) -> ${m.cityName}，期望 $expected")
+        }
+    }
 }

@@ -81,6 +81,36 @@ final class DataStore {
         queue.sync { !punches.isEmpty }
     }
 
+    /// 最近一次成功解析的打卡（按打卡时间），供城市判定的行程连续性交叉验证。
+    func latestResolvedPunch() -> Punch? {
+        queue.sync {
+            punches.filter { $0.cityKey != "unknown" }.max { $0.epochMs < $1.epochMs }
+        }
+    }
+
+    /// 用当前城市库按原始坐标重解析全部打卡（城市库升级后修正历史误判）。
+    /// 手动更正（overrides）不受影响。@return 实际改动的记录数。
+    func remapCities(_ mapper: (Double, Double) -> (key: String, name: String)?) -> Int {
+        queue.sync {
+            var changed = 0
+            for i in punches.indices {
+                guard let (key, name) = mapper(punches[i].lat, punches[i].lng) else { continue }
+                if key != punches[i].cityKey || name != punches[i].cityName {
+                    let p = punches[i]
+                    punches[i] = Punch(
+                        localDate: p.localDate, slot: p.slot, epochMs: p.epochMs, zoneId: p.zoneId,
+                        lat: p.lat, lng: p.lng, accuracyM: p.accuracyM,
+                        cityKey: key, cityName: name,
+                        delayed: p.delayed, fromCache: p.fromCache
+                    )
+                    changed += 1
+                }
+            }
+            if changed > 0 { persist() }
+            return changed
+        }
+    }
+
     func punchesForYear(_ year: Int) -> [Punch] {
         queue.sync { punches.filter { $0.localDate.year == year }.sorted { $0.epochMs < $1.epochMs } }
     }

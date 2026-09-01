@@ -157,7 +157,7 @@ fun SettingsScreen(onBack: () -> Unit) {
 
             item {
                 Text(
-                    "手动补记", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Td.Muted,
+                    "手动补记与更正", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Td.Muted,
                     modifier = Modifier.padding(start = 2.dp, top = 4.dp),
                 )
             }
@@ -177,6 +177,12 @@ fun SettingsScreen(onBack: () -> Unit) {
                             }
                             Icon(painterResource(R.drawable.ic_chev_right), null, Modifier.size(16.dp), tint = Color(0xFFC3CCD4))
                         }
+                        HorizontalDivider(color = Td.Divider, thickness = 1.dp)
+                        Text(
+                            "记录的城市不对？在首页「今日打卡」点「纠正」，或到城市详情里点那一天即可更正",
+                            fontSize = 12.sp, color = Td.Muted, lineHeight = 18.sp,
+                            modifier = Modifier.padding(vertical = 12.dp),
+                        )
                         val overrides = data?.overrides ?: emptyList()
                         if (overrides.isNotEmpty()) {
                             HorizontalDivider(color = Td.Divider, thickness = 1.dp)
@@ -186,11 +192,11 @@ fun SettingsScreen(onBack: () -> Unit) {
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Text(
-                                        "${o.localDate.monthValue}月${o.localDate.dayOfMonth}日 → ${o.cityName}",
+                                        "${o.localDate.monthValue}月${o.localDate.dayOfMonth}日 → ${o.cityName}（手动）",
                                         fontSize = 13.sp, color = Td.Ink, modifier = Modifier.weight(1f),
                                     )
                                     Text(
-                                        "删除", fontSize = 12.sp, color = Td.WarmDeep,
+                                        "恢复自动", fontSize = 12.sp, color = Td.WarmDeep,
                                         modifier = Modifier.clickable {
                                             PunchDb.get(context).removeOverride(o.localDate)
                                             app.terndays.android.widget.TernDaysWidgetProvider.updateAll(context)

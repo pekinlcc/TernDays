@@ -43,7 +43,7 @@ struct SettingsView: View {
                     .padding(.horizontal, 16)
                 }
 
-                Text("手动补记").font(.system(size: 13, weight: .medium)).foregroundColor(Td.muted)
+                Text("手动补记与更正").font(.system(size: 13, weight: .medium)).foregroundColor(Td.muted)
                     .padding(.leading, 2).padding(.top, 4)
                 TdCard {
                     VStack(spacing: 0) {
@@ -63,13 +63,18 @@ struct SettingsView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        Divider().overlay(Td.divider)
+                        Text("记录的城市不对？在首页「今日打卡」点「纠正」，或到城市详情里点那一天即可更正")
+                            .font(.system(size: 12)).foregroundColor(Td.muted)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 12)
                         ForEach(data?.overrides.sorted(by: { $0.localDate > $1.localDate }) ?? [], id: \.localDate) { o in
                             Divider().overlay(Td.divider)
                             HStack {
-                                Text("\(o.localDate.month)月\(o.localDate.day)日 → \(o.cityName)")
+                                Text("\(o.localDate.month)月\(o.localDate.day)日 → \(o.cityName)（手动）")
                                     .font(.system(size: 13)).foregroundColor(Td.ink)
                                 Spacer()
-                                Button("删除") {
+                                Button("恢复自动") {
                                     DataStore.shared.removeOverride(date: o.localDate)
                                     WidgetCenter.shared.reloadAllTimelines()
                                     reload()

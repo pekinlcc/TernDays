@@ -42,7 +42,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import app.terndays.android.R
+import app.terndays.android.db.PunchDb
+import app.terndays.android.widget.TernDaysWidgetProvider
 import app.terndays.core.DayCounting
+import app.terndays.core.DayOverride
 import app.terndays.core.Punch
 import app.terndays.core.Slot
 import java.time.Instant
@@ -72,6 +75,7 @@ fun HomeScreen(
     val data by produceState<YearData?>(initialValue = null, year, tick) {
         value = loadYearData(context, year)
     }
+    var correctingToday by remember { mutableStateOf(false) }
 
     Column(
         Modifier.fillMaxSize().background(Td.Bg).statusBarsPadding()
@@ -105,7 +109,7 @@ fun HomeScreen(
             }
             item { SummaryCard(year, d, onYearChange = { year = it }, onSettings) }
             if (year == LocalDate.now().year) {
-                item { TodayCard(d) }
+                item { TodayCard(d, onCorrect = { correctingToday = true }) }
             }
             item {
                 Row(Modifier.padding(horizontal = 2.dp)) {
@@ -123,6 +127,33 @@ fun HomeScreen(
                 )
             }
         }
+    }
+
+    if (correctingToday) {
+        val today = LocalDate.now()
+        val current = data?.stats?.days?.get(today)
+        CityCorrectDialog(
+            date = today,
+            currentCityName = current?.shares?.joinToString(" + ") { it.cityName },
+            recentCities = data?.stats?.cities?.map { it.cityKey to it.cityName } ?: emptyList(),
+            onDismiss = { correctingToday = false },
+            onPick = { key, name ->
+                PunchDb.get(context).setOverride(DayOverride(today, key, name))
+                TernDaysWidgetProvider.updateAll(context)
+                correctingToday = false
+                tick++
+            },
+            onRestoreAuto = if (data?.overrides?.any { it.localDate == today } == true) {
+                {
+                    PunchDb.get(context).removeOverride(today)
+                    TernDaysWidgetProvider.updateAll(context)
+                    correctingToday = false
+                    tick++
+                }
+            } else {
+                null
+            },
+        )
     }
 }
 
@@ -212,16 +243,30 @@ private fun BigStat(value: String, label: String) {
 }
 
 @Composable
-private fun TodayCard(data: YearData?) {
+private fun TodayCard(data: YearData?, onCorrect: () -> Unit) {
     val today = LocalDate.now()
     val punches = data?.punches?.filter { it.localDate == today } ?: emptyList()
     val morning = punches.firstOrNull { it.slot == Slot.MORNING }
     val evening = punches.firstOrNull { it.slot == Slot.EVENING }
     val extra = punches.firstOrNull { it.slot == Slot.EXTRA }
+    val hasToday = punches.isNotEmpty() || data?.stats?.days?.containsKey(today) == true
 
     TdCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 13.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("今日打卡 · ${today.monthValue}月${today.dayOfMonth}日 ${weekCn(today)}", fontSize = 12.sp, color = Td.Muted)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "今日打卡 · ${today.monthValue}月${today.dayOfMonth}日 ${weekCn(today)}",
+                    fontSize = 12.sp, color = Td.Muted, modifier = Modifier.weight(1f),
+                )
+                if (hasToday) {
+                    // 定位/城市库偶有边界误判（如深圳被判成香港），提供一键人工更正
+                    Text(
+                        "纠正", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Td.AccentDeep,
+                        modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onCorrect)
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+            }
             Row {
                 PunchCell(R.drawable.ic_sun, Color(0xFFA9762F), "早 · 07:00", morning, Modifier.weight(1f))
                 Box(Modifier.width(1.dp).height(40.dp).background(Td.Border))

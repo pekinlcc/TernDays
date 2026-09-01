@@ -49,6 +49,29 @@ final class CityMatcher {
         return Match(cityKey: keys[best], cityName: names[best], distanceKm: bestD)
     }
 
+    /// 按城市去重的前 k 个最近候选（每城取其最近点位），距离升序。供边界交叉验证用。
+    func nearestByCity(lat: Double, lng: Double, k: Int = 3) -> [Match] {
+        guard !lats.isEmpty, k > 0 else { return [] }
+        var cand: [Match] = []
+        cand.reserveCapacity(k + 1)
+        for i in 0..<lats.count {
+            let d = CityMatcher.haversineKm(lat, lng, lats[i], lngs[i])
+            let worst = cand.count < k ? Double.greatestFiniteMagnitude : cand[cand.count - 1].distanceKm
+            if d >= worst { continue }
+            if let existing = cand.firstIndex(where: { $0.cityKey == keys[i] }) {
+                if d < cand[existing].distanceKm {
+                    cand[existing] = Match(cityKey: keys[i], cityName: names[i], distanceKm: d)
+                    cand.sort { $0.distanceKm < $1.distanceKm }
+                }
+            } else {
+                cand.append(Match(cityKey: keys[i], cityName: names[i], distanceKm: d))
+                cand.sort { $0.distanceKm < $1.distanceKm }
+                if cand.count > k { cand.removeLast() }
+            }
+        }
+        return cand
+    }
+
     /// 手动补记时按名称搜索（去重）
     func search(name query: String, limit: Int = 20) -> [(key: String, name: String)] {
         let q = query.trimmingCharacters(in: .whitespaces)

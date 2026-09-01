@@ -2,6 +2,7 @@ package app.terndays.android.ui
 
 import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -14,6 +15,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import app.terndays.android.Prefs
+import app.terndays.android.geo.Cities
 import app.terndays.android.punch.PunchScheduler
 import app.terndays.android.punch.PunchService
 
@@ -33,6 +35,11 @@ class MainActivity : ComponentActivity() {
         if (Prefs.onboardingDone(this)) {
             PunchScheduler.scheduleNext(this)
             PunchService.maybeBackfill(this)
+            Cities.reResolveHistoryIfNeeded(this) { changed ->
+                runOnUiThread {
+                    Toast.makeText(this, "城市库已更新，自动修正了 $changed 条历史记录", Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 }

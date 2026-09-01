@@ -26,6 +26,7 @@ import app.terndays.android.TernDaysApp
 import app.terndays.android.db.PunchDb
 import app.terndays.android.geo.Cities
 import app.terndays.android.ui.MainActivity
+import app.terndays.core.CityResolver
 import app.terndays.core.Punch
 import app.terndays.core.PunchRules
 import app.terndays.core.Slot
@@ -151,7 +152,19 @@ class PunchService : Service() {
 
         Thread {
             try {
-                val match = Cities.get(this).nearest(location.latitude, location.longitude)
+                // 交叉验证：top-3 候选 + 上一次打卡的行程连续性 + 定位误差圈，
+                // 消掉真实边界（深圳/香港、珠海/澳门…）附近的最近邻模糊
+                val accuracy = if (location.hasAccuracy()) location.accuracy.toDouble() else null
+                val candidates = Cities.get(this).nearestByCity(location.latitude, location.longitude, 3)
+                val prev = PunchDb.get(this).latestResolvedPunch()?.let {
+                    CityResolver.Prev(
+                        cityKey = it.cityKey,
+                        lat = it.lat,
+                        lng = it.lng,
+                        ageHours = (System.currentTimeMillis() - it.epochMs) / 3_600_000.0,
+                    )
+                }
+                val match = CityResolver.resolve(candidates, accuracy, prev)?.match
                 val now = ZonedDateTime.now()
                 val zone = ZoneId.systemDefault()
                 val punch = Punch(
@@ -161,7 +174,7 @@ class PunchService : Service() {
                     zoneId = zone.id,
                     lat = location.latitude,
                     lng = location.longitude,
-                    accuracyM = if (location.hasAccuracy()) location.accuracy.toDouble() else null,
+                    accuracyM = accuracy,
                     cityKey = match?.cityKey ?: "unknown",
                     cityName = match?.cityName ?: "未知位置",
                     delayed = PunchRules.isDelayed(now.toLocalTime(), slot),

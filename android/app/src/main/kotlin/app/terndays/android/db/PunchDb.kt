@@ -63,6 +63,61 @@ class PunchDb private constructor(context: Context) :
     fun hasAnyPunch(): Boolean =
         readableDatabase.rawQuery("SELECT 1 FROM punch LIMIT 1", null).use { it.moveToFirst() }
 
+    /** 最近一次成功解析的打卡（按打卡时间），供城市判定的行程连续性交叉验证。 */
+    fun latestResolvedPunch(): Punch? =
+        readableDatabase.rawQuery(
+            "SELECT local_date, slot, epoch_ms, zone_id, lat, lng, accuracy, city_key, city_name, delayed, from_cache " +
+                "FROM punch WHERE city_key != 'unknown' ORDER BY epoch_ms DESC LIMIT 1",
+            null,
+        ).use { c ->
+            if (!c.moveToNext()) return null
+            Punch(
+                localDate = LocalDate.parse(c.getString(0)),
+                slot = Slot.valueOf(c.getString(1)),
+                epochMs = c.getLong(2),
+                zoneId = c.getString(3),
+                lat = c.getDouble(4),
+                lng = c.getDouble(5),
+                accuracyM = if (c.isNull(6)) null else c.getDouble(6),
+                cityKey = c.getString(7),
+                cityName = c.getString(8),
+                delayed = c.getInt(9) == 1,
+                fromCache = c.getInt(10) == 1,
+            )
+        }
+
+    /**
+     * 用当前城市库按原始坐标重解析全部打卡（城市库升级后修正历史误判）。
+     * 手动更正（day_override）不受影响。@return 实际改动的记录数。
+     */
+    fun remapCities(mapper: (lat: Double, lng: Double) -> Pair<String, String>?): Int {
+        val db = writableDatabase
+        var changed = 0
+        db.beginTransaction()
+        try {
+            val updates = ArrayList<Triple<Long, String, String>>()
+            db.rawQuery("SELECT id, lat, lng, city_key, city_name FROM punch", null).use { c ->
+                while (c.moveToNext()) {
+                    val (key, name) = mapper(c.getDouble(1), c.getDouble(2)) ?: continue
+                    if (key != c.getString(3) || name != c.getString(4)) {
+                        updates.add(Triple(c.getLong(0), key, name))
+                    }
+                }
+            }
+            for ((id, key, name) in updates) {
+                val values = ContentValues().apply {
+                    put("city_key", key)
+                    put("city_name", name)
+                }
+                changed += db.update("punch", values, "id=?", arrayOf(id.toString()))
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return changed
+    }
+
     fun hasPunch(date: LocalDate, slot: Slot): Boolean =
         readableDatabase.rawQuery(
             "SELECT 1 FROM punch WHERE local_date=? AND slot=? LIMIT 1",

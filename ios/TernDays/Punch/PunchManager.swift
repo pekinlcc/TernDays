@@ -100,7 +100,21 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
     }
 
     private func record(slot: Slot, location: CLLocation, fromCache: Bool) {
-        let match = Cities.matcher.nearest(lat: location.coordinate.latitude, lng: location.coordinate.longitude)
+        // 交叉验证：top-3 候选 + 上一次打卡的行程连续性 + 定位误差圈，
+        // 消掉真实边界（深圳/香港、珠海/澳门…）附近的最近邻模糊
+        let accuracy = location.horizontalAccuracy >= 0 ? location.horizontalAccuracy : nil
+        let candidates = Cities.matcher.nearestByCity(
+            lat: location.coordinate.latitude, lng: location.coordinate.longitude, k: 3
+        )
+        let prev = DataStore.shared.latestResolvedPunch().map {
+            CityResolver.Prev(
+                cityKey: $0.cityKey,
+                lat: $0.lat,
+                lng: $0.lng,
+                ageHours: (Date().timeIntervalSince1970 * 1000 - Double($0.epochMs)) / 3_600_000
+            )
+        }
+        let match = CityResolver.resolve(candidates: candidates, accuracyM: accuracy, prev: prev)?.match
         let now = Date()
         let punch = Punch(
             localDate: LocalDate(from: now, in: .current),
@@ -109,7 +123,7 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
             zoneId: TimeZone.current.identifier,
             lat: location.coordinate.latitude,
             lng: location.coordinate.longitude,
-            accuracyM: location.horizontalAccuracy >= 0 ? location.horizontalAccuracy : nil,
+            accuracyM: accuracy,
             cityKey: match?.cityKey ?? "unknown",
             cityName: match?.cityName ?? "未知位置",
             delayed: PunchRules.isDelayed(at: now, slot: slot),

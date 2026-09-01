@@ -30,6 +30,19 @@ class CityMatcherTest {
     }
 
     @Test
+    fun `按城市去重的前 k 候选`() {
+        // 杭州西湖附近：杭州最近，湖州次之；同城多点只保留最近的一个
+        val cands = matcher.nearestByCity(30.25, 120.15, 3)
+        assertEquals(3, cands.size)
+        assertEquals("CN:杭州", cands[0].cityKey)
+        assertEquals("CN:湖州", cands[1].cityKey)
+        assertTrue(cands[0].distanceKm < cands[1].distanceKm)
+        assertEquals(1, cands.map { it.cityKey }.groupBy { it }.maxOf { it.value.size })
+        assertEquals(1, matcher.nearestByCity(30.25, 120.15, 1).size)
+        assertTrue(matcher.nearestByCity(30.25, 120.15, 0).isEmpty())
+    }
+
+    @Test
     fun `按名称搜索去重`() {
         val results = matcher.searchByName("州")
         assertEquals(listOf("CN:杭州" to "杭州", "CN:湖州" to "湖州"), results)

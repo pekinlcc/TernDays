@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -39,7 +40,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.terndays.android.R
+import app.terndays.android.db.PunchDb
+import app.terndays.android.widget.TernDaysWidgetProvider
 import app.terndays.core.DayCounting
+import app.terndays.core.DayOverride
 import app.terndays.core.Punch
 import app.terndays.core.Slot
 import java.time.LocalDate
@@ -50,10 +54,12 @@ private data class CityDay(val weight: Double, val manual: Boolean)
 @Composable
 fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
     val context = LocalContext.current
-    val data by produceState<YearData?>(initialValue = null, cityKey, year) {
+    var tick by remember { mutableIntStateOf(0) }
+    val data by produceState<YearData?>(initialValue = null, cityKey, year, tick) {
         value = loadYearData(context, year)
     }
     val d = data
+    var correcting by remember { mutableStateOf<LocalDate?>(null) }
 
     val cityDays: Map<LocalDate, CityDay> = remember(d) {
         d?.stats?.days?.mapNotNull { (date, attr) ->
@@ -107,6 +113,7 @@ fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
                         year = year, month = month, cityDays = cityDays,
                         onPrev = { if (month > 1) month-- },
                         onNext = { if (month < 12) month++ },
+                        onDayClick = { correcting = it },
                     )
                 }
             }
@@ -114,14 +121,41 @@ fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
                 Row(Modifier.padding(horizontal = 2.dp)) {
                     Text("打卡明细", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Td.Muted)
                     Spacer(Modifier.weight(1f))
-                    Text("最近在前", fontSize = 11.sp, color = Td.Faint)
+                    Text("点一天可更正城市", fontSize = 11.sp, color = Td.Faint)
                 }
             }
             item {
-                DetailListCard(cityDays, punchesByDate)
+                DetailListCard(cityDays, punchesByDate, onRowClick = { correcting = it })
             }
             item { Spacer(Modifier.navigationBarsPadding().height(8.dp)) }
         }
+    }
+
+    val target = correcting
+    if (target != null) {
+        val current = d?.stats?.days?.get(target)
+        CityCorrectDialog(
+            date = target,
+            currentCityName = current?.shares?.joinToString(" + ") { it.cityName },
+            recentCities = d?.stats?.cities?.map { it.cityKey to it.cityName } ?: emptyList(),
+            onDismiss = { correcting = null },
+            onPick = { key, name ->
+                PunchDb.get(context).setOverride(DayOverride(target, key, name))
+                TernDaysWidgetProvider.updateAll(context)
+                correcting = null
+                tick++
+            },
+            onRestoreAuto = if (d?.overrides?.any { it.localDate == target } == true) {
+                {
+                    PunchDb.get(context).removeOverride(target)
+                    TernDaysWidgetProvider.updateAll(context)
+                    correcting = null
+                    tick++
+                }
+            } else {
+                null
+            },
+        )
     }
 }
 
@@ -132,6 +166,7 @@ private fun CalendarCard(
     cityDays: Map<LocalDate, CityDay>,
     onPrev: () -> Unit,
     onNext: () -> Unit,
+    onDayClick: (LocalDate) -> Unit,
 ) {
     val ym = YearMonth.of(year, month)
     val monthSum = cityDays.entries.filter { it.key.monthValue == month }.sumOf { it.value.weight }
@@ -164,7 +199,9 @@ private fun CalendarCard(
             val cells: List<LocalDate?> = List(leading) { null } + (1..ym.lengthOfMonth()).map { ym.atDay(it) }
             cells.chunked(7).forEach { week ->
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    week.forEach { date -> DayCell(date, date?.let { cityDays[it] }, Modifier.weight(1f)) }
+                    week.forEach { date ->
+                        DayCell(date, date?.let { cityDays[it] }, Modifier.weight(1f), onDayClick)
+                    }
                     repeat(7 - week.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
@@ -187,9 +224,13 @@ private fun CalendarCard(
 }
 
 @Composable
-private fun DayCell(date: LocalDate?, day: CityDay?, modifier: Modifier) {
+private fun DayCell(date: LocalDate?, day: CityDay?, modifier: Modifier, onClick: (LocalDate) -> Unit) {
     val shape = RoundedCornerShape(10.dp)
-    val base = modifier.height(42.dp)
+    val base = if (date != null && day != null) {
+        modifier.height(42.dp).clip(shape).clickable { onClick(date) }
+    } else {
+        modifier.height(42.dp)
+    }
     val styled = when {
         date == null || day == null -> base
         day.weight >= 1.0 -> base.clip(shape).background(Td.AccentSoft)
@@ -241,7 +282,11 @@ private fun LegendSwatch(full: Boolean) {
 }
 
 @Composable
-private fun DetailListCard(cityDays: Map<LocalDate, CityDay>, punchesByDate: Map<LocalDate, List<Punch>>) {
+private fun DetailListCard(
+    cityDays: Map<LocalDate, CityDay>,
+    punchesByDate: Map<LocalDate, List<Punch>>,
+    onRowClick: (LocalDate) -> Unit,
+) {
     val dates = cityDays.keys.sortedDescending()
     TdCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 2.dp)) {
@@ -260,7 +305,7 @@ private fun DetailListCard(cityDays: Map<LocalDate, CityDay>, punchesByDate: Map
                 val e = punches.firstOrNull { it.slot == Slot.EVENING }
                 val x = punches.firstOrNull { it.slot == Slot.EXTRA }
                 Row(
-                    Modifier.fillMaxWidth().padding(vertical = 11.dp),
+                    Modifier.fillMaxWidth().clickable { onRowClick(date) }.padding(vertical = 11.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
