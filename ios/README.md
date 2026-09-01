@@ -39,6 +39,6 @@ TernDays/
   Punch/          PunchManager：定位权限、SLC、BGTask、本地通知、小组件刷新
   UI/             首页 / 城市日历详情 / 导出 / 设置(补记) / 引导
   cities.tsv      离线城市库（tools/build_city_dataset.py 生成）
-TernDaysWidget/   桌面小组件（small：天数+今日状态；medium：另加 Top 3 城市），
-                  打卡/补记后即时刷新，其余时刻在下一个打卡时间点后自动刷新
+TernDaysWidget/   桌面小组件（small/medium：今年 Top 3 城市及天数），
+                  打卡/补记后即时刷新，其余只在下一个打卡时间点后兜底刷新（每天至多两次）
 ```

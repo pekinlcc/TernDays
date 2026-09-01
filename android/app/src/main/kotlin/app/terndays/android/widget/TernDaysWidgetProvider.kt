@@ -15,7 +15,11 @@ import app.terndays.core.DayCounting
 import app.terndays.core.WidgetSummary
 import java.time.LocalDate
 
-/** 桌面小组件：当年概览（已记录天数 / 城市数 / 今日打卡状态 / Top 3 城市）。 */
+/**
+ * 桌面小组件：只显示今年 Top 3 城市及天数。
+ * 不做周期轮询（updatePeriodMillis=0）：数据只在打卡时变化，
+ * 由打卡 / 补记 / 开机 / 添加小组件时主动刷新（每天通常两次）。
+ */
 class TernDaysWidgetProvider : AppWidgetProvider() {
 
     override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
@@ -53,18 +57,13 @@ class TernDaysWidgetProvider : AppWidgetProvider() {
         private fun buildViews(context: Context): RemoteViews {
             val today = LocalDate.now()
             val db = PunchDb.get(context)
-            val punches = db.punchesForYear(today.year)
-            val overrides = db.overridesForYear(today.year)
-            val stats = DayCounting.computeYearStats(today.year, today, punches, overrides)
-            val model = WidgetSummary.build(stats, today, punches)
+            val stats = DayCounting.computeYearStats(
+                today.year, today, db.punchesForYear(today.year), db.overridesForYear(today.year),
+            )
+            val model = WidgetSummary.build(stats)
 
             val views = RemoteViews(context.packageName, R.layout.widget_terndays)
             views.setTextViewText(R.id.widget_year, model.yearLabel)
-            views.setTextViewText(R.id.widget_big_days, model.bigDays)
-            views.setTextViewText(R.id.widget_stats, model.statsLabel)
-            views.setTextViewText(R.id.widget_today, model.todayLabel ?: "")
-            views.setViewVisibility(R.id.widget_today, if (model.todayLabel != null) View.VISIBLE else View.GONE)
-
             for (i in CITY_ROW_IDS.indices) {
                 val line = model.topCities.getOrNull(i)
                 if (line != null) {
