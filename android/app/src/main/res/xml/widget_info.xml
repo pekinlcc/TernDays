@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 2×2:Android 12+ 按 targetCell 落格;旧系统按 70n−30 公式取 110dp -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-    android:minWidth="160dp"
+    android:minWidth="110dp"
     android:minHeight="110dp"
-    android:minResizeWidth="140dp"
-    android:minResizeHeight="60dp"
-    android:targetCellWidth="3"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="110dp"
+    android:targetCellWidth="2"
     android:targetCellHeight="2"
     android:resizeMode="horizontal|vertical"
     android:updatePeriodMillis="0"

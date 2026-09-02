@@ -2,9 +2,9 @@
 <resources>
     <color name="launcher_bg">#2E7FA8</color>
     <color name="td_window_bg">#F4F6F8</color>
-    <color name="widgetBg">#FFFFFF</color>
-    <color name="widgetInk">#1F2B38</color>
-    <color name="widgetMuted">#6B7A89</color>
+    <!-- 小组件:实心底面 + 两级文字色 + 一处强调色(方案 A · 素面) -->
+    <color name="widgetSurface">#FFFFFF</color>
+    <color name="widgetPrimary">#000000</color>
+    <color name="widgetSecondary">#6E6E73</color>
     <color name="widgetAccent">#1F6289</color>
-    <color name="widgetDivider">#EEF2F5</color>
 </resources>

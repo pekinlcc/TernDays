@@ -1,124 +1,168 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  2×2 小组件,一城一数:
+  表头(Top 1 城市名 17 + 年份 13)→ 英雄行(天数 44 + 「天」15)→ 弹性留白 → 两行脚注(13)。
+  字号比 44 : 17 : 13;只有大数字一处强调色;边距 16dp;所有文字关掉字体内边距以便基线对齐。
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:background="@drawable/widget_bg"
-    android:padding="14dp">
+    android:padding="16dp">
 
     <LinearLayout
+        android:id="@+id/widget_header"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal">
+        android:orientation="horizontal"
+        android:baselineAligned="true">
         <TextView
-            android:id="@+id/widget_app"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="TernDays"
-            android:textSize="11sp"
-            android:textStyle="bold"
-            android:textColor="@color/widgetMuted" />
-        <FrameLayout
+            android:id="@+id/widget_city_1"
             android:layout_width="0dp"
-            android:layout_height="1dp"
-            android:layout_weight="1" />
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:includeFontPadding="false"
+            android:fontFamily="sans-serif-medium"
+            android:textSize="17sp"
+            android:textColor="@color/widgetPrimary" />
         <TextView
             android:id="@+id/widget_year"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="11sp"
-            android:textColor="@color/widgetMuted" />
+            android:layout_marginStart="8dp"
+            android:maxLines="1"
+            android:includeFontPadding="false"
+            android:textSize="13sp"
+            android:textColor="@color/widgetSecondary" />
     </LinearLayout>
 
     <LinearLayout
-        android:id="@+id/widget_city_row_1"
+        android:id="@+id/widget_hero"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
+        android:layout_marginTop="2dp"
         android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:visibility="gone">
+        android:baselineAligned="true">
         <TextView
-            android:id="@+id/widget_city_name_1"
-            android:layout_width="0dp"
-            android:layout_weight="1"
-            android:layout_height="wrap_content"
-            android:singleLine="true"
-            android:ellipsize="end"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:textColor="@color/widgetInk" />
-        <TextView
-            android:id="@+id/widget_city_days_1"
+            android:id="@+id/widget_days_1"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="16sp"
-            android:textStyle="bold"
+            android:maxLines="1"
+            android:includeFontPadding="false"
+            android:fontFamily="sans-serif-medium"
+            android:textSize="44sp"
             android:textColor="@color/widgetAccent" />
-    </LinearLayout>
-
-    <LinearLayout
-        android:id="@+id/widget_city_row_2"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="9dp"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:visibility="gone">
         <TextView
-            android:id="@+id/widget_city_name_2"
-            android:layout_width="0dp"
-            android:layout_weight="1"
-            android:layout_height="wrap_content"
-            android:singleLine="true"
-            android:ellipsize="end"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:textColor="@color/widgetInk" />
-        <TextView
-            android:id="@+id/widget_city_days_2"
+            android:id="@+id/widget_unit_1"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:textColor="@color/widgetAccent" />
-    </LinearLayout>
-
-    <LinearLayout
-        android:id="@+id/widget_city_row_3"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="9dp"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:visibility="gone">
-        <TextView
-            android:id="@+id/widget_city_name_3"
-            android:layout_width="0dp"
-            android:layout_weight="1"
-            android:layout_height="wrap_content"
-            android:singleLine="true"
-            android:ellipsize="end"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:textColor="@color/widgetInk" />
-        <TextView
-            android:id="@+id/widget_city_days_3"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:textColor="@color/widgetAccent" />
+            android:layout_marginStart="3dp"
+            android:maxLines="1"
+            android:includeFontPadding="false"
+            android:fontFamily="sans-serif-medium"
+            android:text="@string/widget_unit_day"
+            android:textSize="15sp"
+            android:textColor="@color/widgetSecondary" />
     </LinearLayout>
 
     <TextView
         android:id="@+id/widget_empty"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
+        android:layout_marginTop="8dp"
+        android:includeFontPadding="false"
         android:text="@string/widget_empty"
-        android:textSize="12sp"
-        android:textColor="@color/widgetMuted"
+        android:textSize="13sp"
+        android:textColor="@color/widgetSecondary"
         android:visibility="gone" />
+
+    <!-- 弹性留白:把脚注压到底部;脚注块自带 6dp 最小间距 -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <LinearLayout
+        android:id="@+id/widget_row_2"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:orientation="horizontal"
+        android:baselineAligned="true"
+        android:visibility="gone">
+        <TextView
+            android:id="@+id/widget_city_2"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:includeFontPadding="false"
+            android:textSize="13sp"
+            android:textColor="@color/widgetPrimary" />
+        <TextView
+            android:id="@+id/widget_days_2"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:maxLines="1"
+            android:includeFontPadding="false"
+            android:fontFamily="sans-serif-medium"
+            android:fontFeatureSettings="tnum"
+            android:textSize="13sp"
+            android:textColor="@color/widgetPrimary" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="2dp"
+            android:maxLines="1"
+            android:includeFontPadding="false"
+            android:text="@string/widget_unit_day"
+            android:textSize="13sp"
+            android:textColor="@color/widgetSecondary" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/widget_row_3"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="3dp"
+        android:orientation="horizontal"
+        android:baselineAligned="true"
+        android:visibility="gone">
+        <TextView
+            android:id="@+id/widget_city_3"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:includeFontPadding="false"
+            android:textSize="13sp"
+            android:textColor="@color/widgetPrimary" />
+        <TextView
+            android:id="@+id/widget_days_3"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:maxLines="1"
+            android:includeFontPadding="false"
+            android:fontFamily="sans-serif-medium"
+            android:fontFeatureSettings="tnum"
+            android:textSize="13sp"
+            android:textColor="@color/widgetPrimary" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="2dp"
+            android:maxLines="1"
+            android:includeFontPadding="false"
+            android:text="@string/widget_unit_day"
+            android:textSize="13sp"
+            android:textColor="@color/widgetSecondary" />
+    </LinearLayout>
 </LinearLayout>

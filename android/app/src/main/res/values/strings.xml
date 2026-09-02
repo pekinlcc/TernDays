@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">TernDays</string>
-    <string name="widget_desc">今年去过最久的 Top 3 城市及天数</string>
+    <string name="widget_desc">今年待得最久的城市及天数</string>
+    <string name="widget_unit_day">天</string>
     <string name="widget_empty">还没有打卡记录</string>
 </resources>
