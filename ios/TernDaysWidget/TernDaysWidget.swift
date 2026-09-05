@@ -37,7 +37,7 @@ struct TernEntry: TimelineEntry {
     let top: [TopCity]
 }
 
-/// 只展示最关键的信息:今年待得最久的城市及天数(锚点),第 2、3 名做脚注。
+/// 只展示最关键的信息:今年 Top 3 城市及天数(三行等权重)。
 /// 刷新是打卡驱动的:应用每次打卡 / 补记会主动 reload;
 /// 时间线只在下一个打卡时间点之后兜底刷一次(每天至多两次),不做高频轮询。
 struct TernProvider: TimelineProvider {
@@ -69,7 +69,8 @@ struct TernProvider: TimelineProvider {
             year: today.year,
             today: today,
             punches: DataStore.shared.punchesForYear(today.year),
-            overrides: DataStore.shared.overridesForYear(today.year)
+            overrides: DataStore.shared.overridesForYear(today.year),
+            nowHour: Calendar.current.component(.hour, from: Date())
         )
         return TernEntry(
             date: Date(),
@@ -94,86 +95,51 @@ private extension View {
     }
 }
 
-/// 一城一数:表头(城市名 17 + 年份 13)→ 英雄行(天数 44 + 「天」15)→ 弹性留白 → 两行脚注(13)。
-/// 字号比 44 : 17 : 13;整块只有大数字一处强调色;不放应用名、不画圆角与装饰。
+/// 年份眉题 + 今年 Top 3 城市,三行等权重(同字号、同字重、同颜色)。
+/// 每行内部:城市名 15 + 天数 20 + 单位 11,基线对齐;右缘对齐成一列。
+/// 整块唯一的品牌色是年份;不放应用名,不画圆角与装饰。
 struct TernDaysWidgetView: View {
     let entry: TernEntry
 
     var body: some View {
-        Group {
-            if let first = entry.top.first {
-                filled(first: first, rest: Array(entry.top.dropFirst()))
+        VStack(alignment: .leading, spacing: 0) {
+            Text(entry.yearLabel)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(WColor.accent)
+                .widgetAccentable()
+                .lineLimit(1)
+
+            if entry.top.isEmpty {
+                Text("还没有打卡记录")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 8)
             } else {
-                empty
+                // 行之间与末尾的 Spacer 平分余量:三行在格子里均匀铺开,不挤在顶部
+                Spacer(minLength: 8)
+                ForEach(entry.top) { c in
+                    if c.id > 0 { Spacer(minLength: 6) }
+                    row(c)
+                }
             }
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityElement(children: .combine)
         .widgetBackgroundCompat()
     }
 
-    private func filled(first: TopCity, rest: [TopCity]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .lastTextBaseline, spacing: 8) {
-                Text(first.name)
-                    .font(.system(size: 17, weight: .semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                Spacer(minLength: 0)
-                Text(entry.yearLabel)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .layoutPriority(1)
-            }
-            .frame(height: 22)
-
-            HStack(alignment: .lastTextBaseline, spacing: 3) {
-                Text(first.days)
-                    .font(.system(size: 44, weight: .semibold))
-                    .foregroundStyle(WColor.accent)
-                    .widgetAccentable()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-                Text("天")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            .frame(height: 52, alignment: .bottomLeading)
-            .padding(.top, 2)
-
-            Spacer(minLength: 6)
-
-            if !rest.isEmpty {
-                VStack(spacing: 3) {
-                    ForEach(rest) { c in
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text(c.name)
-                                .font(.system(size: 13))
-                                .lineLimit(1)
-                            Spacer(minLength: 0)
-                            (Text(c.days).font(.system(size: 13, weight: .medium).monospacedDigit())
-                                + Text(" 天").font(.system(size: 13)).foregroundColor(.secondary))
-                                .lineLimit(1)
-                        }
-                        .frame(height: 17)
-                    }
-                }
-            }
-        }
-    }
-
-    /// 空态:年份留在表头原位,下方一行提示,左对齐、不居中、不插图
-    private var empty: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(entry.yearLabel)
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-                .frame(height: 22)
-            Text("还没有打卡记录")
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-                .padding(.top, 8)
+    private func row(_ c: TopCity) -> some View {
+        HStack(alignment: .lastTextBaseline, spacing: 8) {
+            Text(c.name)
+                .font(.system(size: 15, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
             Spacer(minLength: 0)
+            (Text(c.days).font(.system(size: 20, weight: .semibold).monospacedDigit())
+                + Text(" 天").font(.system(size: 11)).foregroundColor(.secondary))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
         }
     }
 }
@@ -184,7 +150,7 @@ struct TernDaysWidget: Widget {
             TernDaysWidgetView(entry: entry)
         }
         .configurationDisplayName("城市天数")
-        .description("今年待得最久的城市及天数")
+        .description("今年 Top 3 城市及天数")
         .supportedFamilies([.systemSmall])
     }
 }

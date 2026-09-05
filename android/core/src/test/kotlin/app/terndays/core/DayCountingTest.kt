@@ -84,7 +84,7 @@ class DayCountingTest {
         val overrides = listOf(DayOverride(LocalDate.parse("2026-01-04"), "CN:上海", "上海"))
         val stats = DayCounting.computeYearStats(2026, LocalDate.parse("2026-01-05"), punches, overrides)
 
-        assertEquals(4, stats.recordedDays)
+        assertEquals(4.0, stats.recordedDays)
         assertEquals(listOf(LocalDate.parse("2026-01-05")), stats.unrecordedDates)
         assertEquals(2, stats.cities.size)
         // 上海 0.5 + 1 + 1 = 2.5 排第一；北京 1 + 0.5 = 1.5
@@ -115,7 +115,7 @@ class DayCountingTest {
         assertTrue(stats.unrecordedDates.isEmpty())
 
         val empty = DayCounting.computeYearStats(2027, LocalDate.parse("2026-09-01"), emptyList(), emptyList())
-        assertEquals(0, empty.recordedDays)
+        assertEquals(0.0, empty.recordedDays)
         assertTrue(empty.days.isEmpty())
     }
 
@@ -162,5 +162,59 @@ class DayCountingTest {
         assertEquals("152", DayCounting.formatDays(152.0))
         assertEquals("38.5", DayCounting.formatDays(38.5))
         assertEquals("0", DayCounting.formatDays(0.0))
+    }
+
+    @Test
+    fun `进行中的今天只打了早点先算半天`() {
+        val today = LocalDate.parse("2026-09-05")
+        val morningOnly = listOf(punch("2026-09-05", Slot.MORNING, "深圳", epochMs = 1))
+
+        // 上午 9 点:晚点窗口还没到,今天只待了半天
+        val now9 = DayCounting.computeYearStats(2026, today, morningOnly, emptyList(), nowHour = 9)
+        assertEquals(0.5, now9.cities.single().days)
+        assertEquals(0.5, now9.recordedDays)
+
+        // 15 点(过了早点窗口、还没到晚点)仍是半天——晚点还有机会
+        val now15 = DayCounting.computeYearStats(2026, today, morningOnly, emptyList(), nowHour = 15)
+        assertEquals(0.5, now15.cities.single().days)
+
+        // 晚点打上后补满整天
+        val both = morningOnly + punch("2026-09-05", Slot.EVENING, "深圳", epochMs = 2)
+        val done = DayCounting.computeYearStats(2026, today, both, emptyList(), nowHour = 18)
+        assertEquals(1.0, done.cities.single().days)
+
+        // 第二天回看:这一天已结束,单点仍按整天计
+        val nextDay = DayCounting.computeYearStats(2026, LocalDate.parse("2026-09-06"), morningOnly, emptyList(), nowHour = 9)
+        assertEquals(1.0, nextDay.cities.single().days)
+    }
+
+    @Test
+    fun `今天缺的半天窗口已关就按整天`() {
+        val today = LocalDate.parse("2026-09-05")
+        // 20 点只有晚点:早点窗口 12 点已关,不会再补上 → 整天
+        val stats = DayCounting.computeYearStats(
+            2026, today, listOf(punch("2026-09-05", Slot.EVENING, "深圳")), emptyList(), nowHour = 20,
+        )
+        assertEquals(1.0, stats.cities.single().days)
+    }
+
+    @Test
+    fun `今天整天手动更正不受进行中影响`() {
+        val today = LocalDate.parse("2026-09-05")
+        val stats = DayCounting.computeYearStats(
+            2026, today, emptyList(), listOf(DayOverride(today, "CN:深圳", "深圳")), nowHour = 9,
+        )
+        assertEquals(1.0, stats.cities.single().days)
+    }
+
+    @Test
+    fun `今天还没打卡不算漏记`() {
+        val punches = listOf(
+            punch("2026-09-03", Slot.MORNING, "深圳", epochMs = 1),
+            punch("2026-09-03", Slot.EVENING, "深圳", epochMs = 2),
+        )
+        val stats = DayCounting.computeYearStats(2026, LocalDate.parse("2026-09-05"), punches, emptyList(), nowHour = 9)
+        // 9/4 漏了;今天(9/5)还有机会自动打上,不催补记
+        assertEquals(listOf(LocalDate.parse("2026-09-04")), stats.unrecordedDates)
     }
 }

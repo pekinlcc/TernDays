@@ -3,6 +3,7 @@ import Foundation
 /// 计天规则（与 Android :core 对齐，见 docs/requirements.md §2）：
 /// 一天 = 上半天样本 + 下半天样本；正式早/晚点优先；
 /// 首点（extra）只在对应半天样本缺失时兜底（<12 点顶早点，≥12 点顶晚点）。
+/// 「进行中的今天」例外：缺的那半天补捕窗口还没关时，单样本只计 0.5 天。
 enum DayCounting {
 
     /// 半天样本:来自打卡、首点兜底,或半天手动更正
@@ -22,12 +23,14 @@ enum DayCounting {
                      overrides: o.map { [$0] } ?? [])
     }
 
+    /// - Parameter pending: 还可能补上样本的时段（只对进行中的今天非空，见 PunchRules.pendingSlots）
     static func attributeDay(
         date: LocalDate,
         morning: Punch?,
         evening: Punch?,
         extra: Punch?,
-        overrides: [DayOverride]
+        overrides: [DayOverride],
+        pending: Set<Slot> = []
     ) -> DayAttribution {
         if let full = overrides.first(where: { $0.scope == .full }) {
             return DayAttribution(
@@ -44,10 +47,11 @@ enum DayCounting {
             ?? mPunch.map { Sample(cityKey: $0.cityKey, cityName: $0.cityName) }
         let e = eo.map { Sample(cityKey: $0.cityKey, cityName: $0.cityName) }
             ?? ePunch.map { Sample(cityKey: $0.cityKey, cityName: $0.cityName) }
-        return attributeSamples(date: date, morning: m, evening: e, manual: mo != nil || eo != nil)
+        return attributeSamples(date: date, morning: m, evening: e, manual: mo != nil || eo != nil, pending: pending)
     }
 
-    private static func attributeSamples(date: LocalDate, morning: Sample?, evening: Sample?, manual: Bool) -> DayAttribution {
+    private static func attributeSamples(date: LocalDate, morning: Sample?, evening: Sample?, manual: Bool,
+                                         pending: Set<Slot>) -> DayAttribution {
         switch (morning, evening) {
         case let (m?, e?):
             if m.cityKey == e.cityKey {
@@ -57,20 +61,26 @@ enum DayCounting {
                 CityShare(cityKey: m.cityKey, cityName: m.cityName, weight: 0.5),
                 CityShare(cityKey: e.cityKey, cityName: e.cityName, weight: 0.5),
             ], manual: manual)
+        // 单样本:另一半天还没到点(进行中的今天)只算 0.5 天;窗口已关则按整天
         case let (m?, nil):
-            return DayAttribution(date: date, shares: [CityShare(cityKey: m.cityKey, cityName: m.cityName, weight: 1.0)], manual: manual)
+            let w = pending.contains(.evening) ? 0.5 : 1.0
+            return DayAttribution(date: date, shares: [CityShare(cityKey: m.cityKey, cityName: m.cityName, weight: w)], manual: manual)
         case let (nil, e?):
-            return DayAttribution(date: date, shares: [CityShare(cityKey: e.cityKey, cityName: e.cityName, weight: 1.0)], manual: manual)
+            let w = pending.contains(.morning) ? 0.5 : 1.0
+            return DayAttribution(date: date, shares: [CityShare(cityKey: e.cityKey, cityName: e.cityName, weight: w)], manual: manual)
         default:
             return DayAttribution(date: date, shares: [])
         }
     }
 
+    /// - Parameter nowHour: 当前本地小时（0–23）。给了就把 today 当作「进行中」：
+    ///   还没打的那半天不算漏记，单样本先按 0.5 天计。传 nil 表示按已结束的日子统计。
     static func computeYearStats(
         year: Int,
         today: LocalDate,
         punches: [Punch],
-        overrides: [DayOverride]
+        overrides: [DayOverride],
+        nowHour: Int? = nil
     ) -> YearStats {
         let first = LocalDate(year: year, month: 1, day: 1)
         let yearEnd = LocalDate(year: year, month: 12, day: 31)
@@ -97,21 +107,24 @@ enum DayCounting {
 
         var days: [LocalDate: DayAttribution] = [:]
         var unrecorded: [LocalDate] = []
-        var recorded = 0
+        var recorded = 0.0
         var d = first
         while d <= last {
+            let pending: Set<Slot> = (d == today && nowHour != nil) ? PunchRules.pendingSlots(hour: nowHour!) : []
             let attr = attributeDay(
                 date: d,
                 morning: bySlot["\(d)|\(Slot.morning.rawValue)"],
                 evening: bySlot["\(d)|\(Slot.evening.rawValue)"],
                 extra: bySlot["\(d)|\(Slot.extra.rawValue)"],
-                overrides: overridesByDate[d] ?? []
+                overrides: overridesByDate[d] ?? [],
+                pending: pending
             )
             days[d] = attr
             if attr.shares.isEmpty {
-                if d >= firstRecordDate { unrecorded.append(d) }
+                // 今天还没过完就不算「漏记」——还有机会自动打上
+                if d >= firstRecordDate && pending.isEmpty { unrecorded.append(d) }
             } else {
-                recorded += 1
+                recorded += attr.shares.reduce(0) { $0 + $1.weight }
             }
             if d == last { break }
             d = d.next()

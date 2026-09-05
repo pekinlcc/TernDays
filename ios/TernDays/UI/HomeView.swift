@@ -126,7 +126,7 @@ struct HomeView: View {
                     }
                 }
                 HStack(alignment: .bottom, spacing: 26) {
-                    bigStat(value: data.map { String($0.stats.recordedDays) } ?? "–", label: "天已记录")
+                    bigStat(value: data.map { DayCounting.formatDays($0.stats.recordedDays) } ?? "–", label: "天已记录")
                     bigStat(value: data.map { String($0.stats.cities.count) } ?? "–", label: "个城市")
                     Spacer()
                     if let missing = data?.stats.unrecordedDates.count, missing > 0 {
@@ -177,6 +177,11 @@ struct HomeView: View {
                 }
                 if let extra {
                     Text("首点 \(extra.clock) · \(extra.cityName) ✓（已记录当前位置）")
+                        .font(.system(size: 11)).foregroundColor(Td.faint)
+                }
+                // 今天还没打完:单个样本先算 0.5 天,说明清楚免得以为少算了
+                if let shares = data?.stats.days[today]?.shares, shares.count == 1, shares[0].weight == 0.5 {
+                    Text(evening == nil ? "今天先算半天 · 晚点打上后补满一天" : "今天先算半天 · 早点补上后补满一天")
                         .font(.system(size: 11)).foregroundColor(Td.faint)
                 }
             }

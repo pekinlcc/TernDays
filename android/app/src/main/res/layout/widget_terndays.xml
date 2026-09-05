@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  2×2 小组件,一城一数:
-  表头(Top 1 城市名 17 + 年份 13)→ 英雄行(天数 44 + 「天」15)→ 弹性留白 → 两行脚注(13)。
-  字号比 44 : 17 : 13;只有大数字一处强调色;边距 16dp;所有文字关掉字体内边距以便基线对齐。
+  2×2 小组件:年份眉题 + 今年 Top 3 城市,三行等权重(同字号、同字重、同颜色)。
+  每行内部:城市名 15 + 天数 19 + 单位 11,基线对齐;右缘对齐成一列。
+  整块唯一的品牌色是年份;无描边 / 阴影 / 高光,边距 16dp,圆角跟系统。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root"
@@ -12,62 +12,15 @@
     android:background="@drawable/widget_bg"
     android:padding="16dp">
 
-    <LinearLayout
-        android:id="@+id/widget_header"
+    <TextView
+        android:id="@+id/widget_year"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:baselineAligned="true">
-        <TextView
-            android:id="@+id/widget_city_1"
-            android:layout_width="0dp"
-            android:layout_weight="1"
-            android:layout_height="wrap_content"
-            android:maxLines="1"
-            android:ellipsize="end"
-            android:includeFontPadding="false"
-            android:fontFamily="sans-serif-medium"
-            android:textSize="17sp"
-            android:textColor="@color/widgetPrimary" />
-        <TextView
-            android:id="@+id/widget_year"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:maxLines="1"
-            android:includeFontPadding="false"
-            android:textSize="13sp"
-            android:textColor="@color/widgetSecondary" />
-    </LinearLayout>
-
-    <LinearLayout
-        android:id="@+id/widget_hero"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
-        android:orientation="horizontal"
-        android:baselineAligned="true">
-        <TextView
-            android:id="@+id/widget_days_1"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:maxLines="1"
-            android:includeFontPadding="false"
-            android:fontFamily="sans-serif-medium"
-            android:textSize="44sp"
-            android:textColor="@color/widgetAccent" />
-        <TextView
-            android:id="@+id/widget_unit_1"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="3dp"
-            android:maxLines="1"
-            android:includeFontPadding="false"
-            android:fontFamily="sans-serif-medium"
-            android:text="@string/widget_unit_day"
-            android:textSize="15sp"
-            android:textColor="@color/widgetSecondary" />
-    </LinearLayout>
+        android:maxLines="1"
+        android:includeFontPadding="false"
+        android:fontFamily="sans-serif-medium"
+        android:textSize="12sp"
+        android:textColor="@color/widgetAccent" />
 
     <TextView
         android:id="@+id/widget_empty"
@@ -80,17 +33,64 @@
         android:textColor="@color/widgetSecondary"
         android:visibility="gone" />
 
-    <!-- 弹性留白:把脚注压到底部;脚注块自带 6dp 最小间距 -->
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1"
+        android:minHeight="8dp" />
+
+    <LinearLayout
+        android:id="@+id/widget_row_1"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:baselineAligned="true"
+        android:visibility="gone">
+        <TextView
+            android:id="@+id/widget_city_1"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:includeFontPadding="false"
+            android:fontFamily="sans-serif-medium"
+            android:textSize="15sp"
+            android:textColor="@color/widgetPrimary" />
+        <TextView
+            android:id="@+id/widget_days_1"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:maxLines="1"
+            android:includeFontPadding="false"
+            android:fontFamily="sans-serif-medium"
+            android:fontFeatureSettings="tnum"
+            android:textSize="19sp"
+            android:textColor="@color/widgetPrimary" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="2dp"
+            android:maxLines="1"
+            android:includeFontPadding="false"
+            android:text="@string/widget_unit_day"
+            android:textSize="11sp"
+            android:textColor="@color/widgetSecondary" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/widget_gap_2"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:minHeight="6dp"
+        android:visibility="gone" />
 
     <LinearLayout
         android:id="@+id/widget_row_2"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
         android:orientation="horizontal"
         android:baselineAligned="true"
         android:visibility="gone">
@@ -102,7 +102,8 @@
             android:maxLines="1"
             android:ellipsize="end"
             android:includeFontPadding="false"
-            android:textSize="13sp"
+            android:fontFamily="sans-serif-medium"
+            android:textSize="15sp"
             android:textColor="@color/widgetPrimary" />
         <TextView
             android:id="@+id/widget_days_2"
@@ -113,7 +114,7 @@
             android:includeFontPadding="false"
             android:fontFamily="sans-serif-medium"
             android:fontFeatureSettings="tnum"
-            android:textSize="13sp"
+            android:textSize="19sp"
             android:textColor="@color/widgetPrimary" />
         <TextView
             android:layout_width="wrap_content"
@@ -122,15 +123,22 @@
             android:maxLines="1"
             android:includeFontPadding="false"
             android:text="@string/widget_unit_day"
-            android:textSize="13sp"
+            android:textSize="11sp"
             android:textColor="@color/widgetSecondary" />
     </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/widget_gap_3"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:minHeight="6dp"
+        android:visibility="gone" />
 
     <LinearLayout
         android:id="@+id/widget_row_3"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="3dp"
         android:orientation="horizontal"
         android:baselineAligned="true"
         android:visibility="gone">
@@ -142,7 +150,8 @@
             android:maxLines="1"
             android:ellipsize="end"
             android:includeFontPadding="false"
-            android:textSize="13sp"
+            android:fontFamily="sans-serif-medium"
+            android:textSize="15sp"
             android:textColor="@color/widgetPrimary" />
         <TextView
             android:id="@+id/widget_days_3"
@@ -153,7 +162,7 @@
             android:includeFontPadding="false"
             android:fontFamily="sans-serif-medium"
             android:fontFeatureSettings="tnum"
-            android:textSize="13sp"
+            android:textSize="19sp"
             android:textColor="@color/widgetPrimary" />
         <TextView
             android:layout_width="wrap_content"
@@ -162,7 +171,12 @@
             android:maxLines="1"
             android:includeFontPadding="false"
             android:text="@string/widget_unit_day"
-            android:textSize="13sp"
+            android:textSize="11sp"
             android:textColor="@color/widgetSecondary" />
     </LinearLayout>
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
 </LinearLayout>

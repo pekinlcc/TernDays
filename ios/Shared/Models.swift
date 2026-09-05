@@ -178,7 +178,8 @@ struct YearStats {
     let year: Int
     let firstDate: LocalDate
     let lastDate: LocalDate
-    let recordedDays: Int
+    /// 已记录天数（= 各城市天数之和；跨城日 0.5+0.5，进行中的今天可能是 0.5）
+    let recordedDays: Double
     let cities: [CityStat]
     let unrecordedDates: [LocalDate]
     let days: [LocalDate: DayAttribution]

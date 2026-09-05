@@ -59,7 +59,8 @@ data class YearStats(
     val year: Int,
     val firstDate: LocalDate,
     val lastDate: LocalDate,
-    val recordedDays: Int,
+    /** 已记录天数（= 各城市天数之和；跨城日 0.5+0.5，进行中的今天可能是 0.5） */
+    val recordedDays: Double,
     val cities: List<CityStat>,
     val unrecordedDates: List<LocalDate>,
     val days: Map<LocalDate, DayAttribution>,

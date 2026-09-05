@@ -7,7 +7,6 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
-import android.util.TypedValue
 import android.view.View
 import android.widget.RemoteViews
 import app.terndays.android.R
@@ -18,7 +17,7 @@ import app.terndays.core.WidgetSummary
 import java.time.LocalDate
 
 /**
- * 2×2 桌面小组件,一城一数:今年待得最久的城市 + 天数做唯一锚点,第 2、3 名是两行脚注。
+ * 2×2 桌面小组件:今年 Top 3 城市及天数,三行等权重(同字号同色)。
  * 不做周期轮询(updatePeriodMillis=0):数据只在打卡时变化,
  * 由打卡 / 补记 / 开机 / 添加小组件时主动刷新(每天通常两次)。
  */
@@ -50,9 +49,16 @@ class TernDaysWidgetProvider : AppWidgetProvider() {
     }
 
     companion object {
-        /** 脚注两行都显示所需的最小高度;再矮先收第 3 名,再矮全收。 */
-        private const val MIN_HEIGHT_TWO_ROWS_DP = 128
-        private const val MIN_HEIGHT_ONE_ROW_DP = 112
+        private val CITY_ROW_IDS = intArrayOf(R.id.widget_row_1, R.id.widget_row_2, R.id.widget_row_3)
+        private val CITY_NAME_IDS = intArrayOf(R.id.widget_city_1, R.id.widget_city_2, R.id.widget_city_3)
+        private val CITY_DAYS_IDS = intArrayOf(R.id.widget_days_1, R.id.widget_days_2, R.id.widget_days_3)
+
+        /** 第 2、3 行前面的弹性间距:行不显示时一并收掉,免得留一段空白 */
+        private val CITY_GAP_IDS = intArrayOf(View.NO_ID, R.id.widget_gap_2, R.id.widget_gap_3)
+
+        /** 竖屏高度够放满 3 行 / 2 行所需的 dp（行 ≈ 27dp,含年份与 16dp 上下边距）。 */
+        private const val HEIGHT_THREE_ROWS_DP = 134
+        private const val HEIGHT_TWO_ROWS_DP = 106
 
         /** 打卡 / 补记后调用,后台线程刷新所有实例(应用进程存活场景)。 */
         fun updateAll(context: Context) {
@@ -74,10 +80,11 @@ class TernDaysWidgetProvider : AppWidgetProvider() {
         private fun push(context: Context, manager: AppWidgetManager, ids: IntArray) {
             val model = loadModel(context)
             ids.forEach { id ->
-                val minHeightDp = runCatching {
-                    manager.getAppWidgetOptions(id).getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 0)
+                // 竖屏高度 = OPTION_APPWIDGET_MAX_HEIGHT(MIN_HEIGHT 是横屏值,会偏小)
+                val heightDp = runCatching {
+                    manager.getAppWidgetOptions(id).getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0)
                 }.getOrDefault(0)
-                manager.updateAppWidget(id, buildViews(context, model, minHeightDp))
+                manager.updateAppWidget(id, buildViews(context, model, heightDp))
             }
         }
 
@@ -86,53 +93,47 @@ class TernDaysWidgetProvider : AppWidgetProvider() {
             val db = PunchDb.get(context)
             val stats = DayCounting.computeYearStats(
                 today.year, today, db.punchesForYear(today.year), db.overridesForYear(today.year),
+                java.time.LocalTime.now().hour,
             )
             return WidgetSummary.build(stats)
         }
 
-        private fun buildViews(context: Context, model: WidgetSummary.Model, minHeightDp: Int): RemoteViews {
+        private fun buildViews(context: Context, model: WidgetSummary.Model, heightDp: Int): RemoteViews {
             val views = RemoteViews(context.packageName, R.layout.widget_terndays)
             views.setTextViewText(R.id.widget_year, model.yearLabel)
 
-            val first = model.topCities.firstOrNull()
-            if (first == null) {
-                // 空态:年份留在表头左侧,下方一行提示;其余隐藏
-                views.setViewVisibility(R.id.widget_city_1, View.GONE)
-                views.setViewVisibility(R.id.widget_hero, View.GONE)
-                views.setViewVisibility(R.id.widget_row_2, View.GONE)
-                views.setViewVisibility(R.id.widget_row_3, View.GONE)
-                views.setViewVisibility(R.id.widget_empty, View.VISIBLE)
-                views.setContentDescription(
-                    R.id.widget_root, "${model.yearLabel},${context.getString(R.string.widget_empty)}",
-                )
-            } else {
-                views.setViewVisibility(R.id.widget_empty, View.GONE)
-                views.setViewVisibility(R.id.widget_city_1, View.VISIBLE)
-                views.setViewVisibility(R.id.widget_hero, View.VISIBLE)
-                views.setTextViewText(R.id.widget_city_1, first.name)
-                views.setTextViewText(R.id.widget_days_1, first.days)
-                // 最宽值(如 156.5)在 2×2 内容区放不下 44sp,降一档;其余保持锚点字号
-                val heroSp = if (first.days.length >= 5) 38f else 44f
-                views.setTextViewTextSize(R.id.widget_days_1, TypedValue.COMPLEX_UNIT_SP, heroSp)
-
-                // 脚注:按实际高度决定显示几行(0 表示启动器未提供尺寸,按默认 2×2 处理)
-                val rowsAllowed = when {
-                    minHeightDp == 0 || minHeightDp >= MIN_HEIGHT_TWO_ROWS_DP -> 2
-                    minHeightDp >= MIN_HEIGHT_ONE_ROW_DP -> 1
-                    else -> 0
-                }
-                val second = model.topCities.getOrNull(1)?.takeIf { rowsAllowed >= 1 }
-                val third = model.topCities.getOrNull(2)?.takeIf { rowsAllowed >= 2 }
-                bindRow(views, R.id.widget_row_2, R.id.widget_city_2, R.id.widget_days_2, second)
-                bindRow(views, R.id.widget_row_3, R.id.widget_city_3, R.id.widget_days_3, third)
-
-                val unit = context.getString(R.string.widget_unit_day)
-                val spoken = buildString {
-                    append(model.yearLabel)
-                    model.topCities.forEach { append(",").append(it.name).append(" ").append(it.days).append(" ").append(unit) }
-                }
-                views.setContentDescription(R.id.widget_root, spoken)
+            // 矮格子放不下三行就少显示一行,宁可少显示也不截断(0 = 启动器没给尺寸,按标准 2×2 处理)
+            val maxRows = when {
+                heightDp == 0 || heightDp >= HEIGHT_THREE_ROWS_DP -> 3
+                heightDp >= HEIGHT_TWO_ROWS_DP -> 2
+                else -> 1
             }
+            for (i in CITY_ROW_IDS.indices) {
+                val line = model.topCities.getOrNull(i)?.takeIf { i < maxRows }
+                bindRow(views, CITY_ROW_IDS[i], CITY_NAME_IDS[i], CITY_DAYS_IDS[i], line)
+                if (CITY_GAP_IDS[i] != View.NO_ID) {
+                    views.setViewVisibility(CITY_GAP_IDS[i], if (line == null) View.GONE else View.VISIBLE)
+                }
+            }
+            views.setViewVisibility(
+                R.id.widget_empty,
+                if (model.topCities.isEmpty()) View.VISIBLE else View.GONE,
+            )
+
+            val unit = context.getString(R.string.widget_unit_day)
+            views.setContentDescription(
+                R.id.widget_root,
+                if (model.topCities.isEmpty()) {
+                    "${model.yearLabel},${context.getString(R.string.widget_empty)}"
+                } else {
+                    buildString {
+                        append(model.yearLabel)
+                        model.topCities.forEach {
+                            append(",").append(it.name).append(" ").append(it.days).append(" ").append(unit)
+                        }
+                    }
+                },
+            )
 
             val pi = PendingIntent.getActivity(
                 context, 0, Intent(context, MainActivity::class.java),

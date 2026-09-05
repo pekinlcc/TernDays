@@ -8,6 +8,15 @@ enum PunchRules {
     static let morningWindowEndHour = 12
     static let delayToleranceMinutes = 15
 
+    /// 今天还「有机会」补上的时段（补捕窗口未关）：
+    /// 早点 [07:00, 12:00) —— 未过 12 点就还可能打上；晚点 [17:00, 24:00) —— 当天始终还有机会。
+    /// 用于把进行中的今天按半天计（见 DayCounting）。
+    static func pendingSlots(hour: Int) -> Set<Slot> {
+        var s: Set<Slot> = [.evening] // 晚点窗口开到当天结束
+        if hour < morningWindowEndHour { s.insert(.morning) }
+        return s
+    }
+
     static func slotInWindow(hour: Int, minute: Int) -> Slot? {
         if hour >= morningHour && hour < morningWindowEndHour { return .morning }
         if hour >= eveningHour { return .evening }

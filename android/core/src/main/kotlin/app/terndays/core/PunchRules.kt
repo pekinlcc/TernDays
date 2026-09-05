@@ -24,6 +24,18 @@ object PunchRules {
         Slot.EXTRA -> null
     }
 
+    /**
+     * 今天还「有机会」补上的时段（补捕窗口未关）：
+     * 早点窗口 [07:00, 12:00) —— 未过 12 点就还可能打上；晚点窗口 [17:00, 24:00) —— 当天始终还有机会。
+     * 用于把进行中的今天按半天计：只打上早点、晚点还没到时，今天先算 0.5 天（见 DayCounting）。
+     */
+    fun pendingSlots(hour: Int): Set<Slot> {
+        val s = LinkedHashSet<Slot>()
+        if (hour < MORNING_WINDOW_END.hour) s.add(Slot.MORNING)
+        s.add(Slot.EVENING) // 晚点窗口开到当天结束，只要今天没过完就还有机会
+        return s
+    }
+
     /** EXTRA 点按捕获时刻归属的半天：true = 上半天（可兜底早点），false = 下半天（可兜底晚点）。 */
     fun isMorningHalf(time: LocalTime): Boolean = time.hour < 12
 

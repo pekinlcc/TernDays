@@ -234,7 +234,7 @@ private fun SummaryCard(year: Int, data: YearData?, onYearChange: (Int) -> Unit,
                 Text(range, fontSize = 12.sp, color = Td.Muted)
             }
             Row(verticalAlignment = Alignment.Bottom) {
-                BigStat(data?.stats?.recordedDays?.toString() ?: "–", "天已记录")
+                BigStat(data?.stats?.let { DayCounting.formatDays(it.recordedDays) } ?: "–", "天已记录")
                 Spacer(Modifier.width(26.dp))
                 BigStat(data?.stats?.cities?.size?.toString() ?: "–", "个城市")
                 Spacer(Modifier.weight(1f))
@@ -299,6 +299,14 @@ private fun TodayCard(data: YearData?, onCorrect: () -> Unit) {
             if (extra != null) {
                 Text(
                     "首点 ${punchClock(extra)} · ${extra.cityName} ✓（已记录当前位置）",
+                    fontSize = 11.sp, color = Td.Faint,
+                )
+            }
+            // 今天还没打完:单个样本先算 0.5 天,说明清楚免得以为少算了
+            val pendingHalf = data?.stats?.days?.get(today)?.shares?.singleOrNull()?.takeIf { it.weight == 0.5 }
+            if (pendingHalf != null) {
+                Text(
+                    if (evening == null) "今天先算半天 · 晚点打上后补满一天" else "今天先算半天 · 早点补上后补满一天",
                     fontSize = 11.sp, color = Td.Faint,
                 )
             }
