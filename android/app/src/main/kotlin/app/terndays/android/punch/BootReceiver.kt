@@ -7,7 +7,7 @@ import app.terndays.android.Prefs
 import app.terndays.android.widget.TernDaysWidgetProvider
 
 /**
- * 开机 / 时区变更 / 时间调整 / 应用升级后：重排闹钟；开机场景顺带尝试补打。
+ * 开机 / 时区变更 / 时间调整 / 应用升级后：重排闹钟并尝试补打。
  * 另监听「闹钟和提醒」权限恢复(Android 12+ 收回该权限时系统会清掉已排闹钟并停掉应用,
  * 重新授予时借这个广播把打卡链条重新接上,而不是静默死亡)。
  */
@@ -33,6 +33,12 @@ class BootReceiver : BroadcastReceiver() {
             }
             Intent.ACTION_TIMEZONE_CHANGED,
             Intent.ACTION_TIME_CHANGED,
+            -> {
+                PunchScheduler.scheduleNext(context)
+                // 向东飞落地后当天那个时段的闹钟可能已经"过去"了:重排之后立刻补打一次,
+                // 否则整个时段就这么丢了(此前只重排不补打)
+                PunchService.maybeBackfill(context)
+            }
             ACTION_EXACT_ALARM_PERMISSION_CHANGED,
             -> PunchScheduler.scheduleNext(context)
         }

@@ -31,6 +31,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // 落盘失败要让用户看见:否则界面提示「已保存」,重启后改动却消失了
+        DataStore.shared.onWriteFailure = { ToastCenter.shared.show($0) }
         PunchManager.shared.registerBackgroundTask()
         if UserDefaults.standard.bool(forKey: "onboardingDone") {
             PunchManager.shared.activate()

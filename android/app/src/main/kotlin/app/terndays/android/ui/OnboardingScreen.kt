@@ -71,7 +71,7 @@ fun OnboardingScreen(onDone: () -> Unit) {
     val multiLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) {
-        if (!Perms.fineLocation(context)) deniedSteps = deniedSteps + Step.FINE
+        if (!Perms.anyLocation(context)) deniedSteps = deniedSteps + Step.FINE
         tick++
     }
     val singleLauncher = rememberLauncherForActivityResult(
@@ -84,7 +84,7 @@ fun OnboardingScreen(onDone: () -> Unit) {
     // tick 参与计算以便授权后刷新
     val step = remember(tick) {
         when {
-            !Perms.fineLocation(context) -> Step.FINE
+            !Perms.anyLocation(context) -> Step.FINE
             !Perms.backgroundLocation(context) -> Step.BACKGROUND
             !Perms.notifications(context) -> Step.NOTIFY
             !Perms.exactAlarm(context) -> Step.EXACT_ALARM

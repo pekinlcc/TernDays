@@ -130,8 +130,16 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
                 key(tick) {
                     TdCard(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(horizontal = 16.dp)) {
-                            PermRow("定位权限", "打卡时获取一次 GPS 位置", Perms.fineLocation(context)) {
-                                if (!Perms.fineLocation(context)) {
+                            PermRow(
+                                "定位权限",
+                                if (Perms.anyLocation(context) && !Perms.fineLocation(context)) {
+                                    "当前只有「大致位置」,边界城市可能判不准,建议改为「精确位置」"
+                                } else {
+                                    "打卡时获取一次 GPS 位置"
+                                },
+                                Perms.anyLocation(context),
+                            ) {
+                                if (!Perms.anyLocation(context)) {
                                     finePermLauncher.launch(
                                         arrayOf(
                                             Manifest.permission.ACCESS_FINE_LOCATION,
@@ -143,8 +151,13 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
                                 }
                             }
                             HorizontalDivider(color = Td.Divider, thickness = 1.dp)
+                            // 权限全绿也可能因为系统定位总开关是关的而一条都打不上
+                            PermRow("系统定位服务", "关掉的话权限再全也拿不到位置", Perms.locationServicesEnabled(context)) {
+                                Perms.openLocationSettings(context)
+                            }
+                            HorizontalDivider(color = Td.Divider, thickness = 1.dp)
                             PermRow("后台定位「始终允许」", "熄屏 / 后台时也能完成定点打卡", Perms.backgroundLocation(context)) {
-                                if (Build.VERSION.SDK_INT >= 29 && Perms.fineLocation(context) &&
+                                if (Build.VERSION.SDK_INT >= 29 && Perms.anyLocation(context) &&
                                     !Perms.backgroundLocation(context)
                                 ) {
                                     singlePermLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
