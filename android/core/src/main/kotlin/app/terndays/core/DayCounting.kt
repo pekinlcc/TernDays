@@ -22,7 +22,7 @@ object DayCounting {
      * 时区 id 来自落库时的系统值，也可能来自另一台手机导入的数据；
      * 系统升级后个别 id 会失效，`ZoneId.of` 直接抛异常会把首页/导出整个带崩。
      */
-    internal fun zoneOf(id: String): java.time.ZoneId =
+    fun zoneOf(id: String): java.time.ZoneId =
         runCatching { java.time.ZoneId.of(id) }.getOrElse { java.time.ZoneId.systemDefault() }
 
     /** 半天样本:来自打卡、首点兜底,或半天手动更正。 */
