@@ -51,15 +51,16 @@ import app.terndays.android.widget.TernDaysWidgetProvider
 import app.terndays.core.DayCounting
 import app.terndays.core.DayOverride
 import app.terndays.core.Punch
+import app.terndays.core.PunchRules
 import app.terndays.core.Slot
 import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneId
+import java.time.LocalTime
 
 private val WEEK_CN = arrayOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 internal fun weekCn(d: LocalDate) = WEEK_CN[d.dayOfWeek.value - 1]
 internal fun punchClock(p: Punch): String {
-    val t = Instant.ofEpochMilli(p.epochMs).atZone(ZoneId.of(p.zoneId)).toLocalTime()
+    val t = Instant.ofEpochMilli(p.epochMs).atZone(DayCounting.zoneOf(p.zoneId)).toLocalTime()
     return "%02d:%02d".format(t.hour, t.minute)
 }
 
@@ -138,24 +139,41 @@ fun HomeScreen(
         val today = LocalDate.now()
         val current = data?.stats?.days?.get(today)
         val todayPunches = data?.punches?.filter { it.localDate == today } ?: emptyList()
+        // 只要有半天样本就允许半天更正:进行中的今天只打了早点时,整天更正会把还没到的
+        // 晚点那半天一起吞掉(此前只有早晚都打上了才给选)
+        val (hasM, hasE) = DayCounting.halfSampleFlags(
+            todayPunches.firstOrNull { it.slot == Slot.MORNING },
+            todayPunches.firstOrNull { it.slot == Slot.EVENING },
+            todayPunches.firstOrNull { it.slot == Slot.EXTRA },
+        )
         CityCorrectDialog(
             date = today,
             currentCityName = current?.shares?.joinToString(" + ") { it.cityName },
             recentCities = data?.stats?.cities?.map { it.cityKey to it.cityName } ?: emptyList(),
-            hasBothHalves = todayPunches.any { it.slot == Slot.MORNING } && todayPunches.any { it.slot == Slot.EVENING },
+            hasBothHalves = hasM || hasE,
+            existing = data?.overrides?.filter { it.localDate == today } ?: emptyList(),
             onDismiss = { correctingToday = false },
             onPick = { key, name, scope ->
-                PunchDb.get(context).setOverride(DayOverride(today, key, name, scope))
-                TernDaysWidgetProvider.updateAll(context)
+                // 写库不占主线程(事务 + 触发重算)
+                Thread {
+                    runCatching {
+                        PunchDb.get(context).setOverride(DayOverride(today, key, name, scope))
+                        TernDaysWidgetProvider.updateAll(context)
+                        DataBus.bump()
+                    }
+                }.apply { isDaemon = true }.start()
                 correctingToday = false
-                tick++
             },
             onRestoreAuto = if (data?.overrides?.any { it.localDate == today } == true) {
                 {
-                    PunchDb.get(context).removeOverride(today)
-                    TernDaysWidgetProvider.updateAll(context)
+                    Thread {
+                        runCatching {
+                            PunchDb.get(context).removeOverride(today)
+                            TernDaysWidgetProvider.updateAll(context)
+                            DataBus.bump()
+                        }
+                    }.apply { isDaemon = true }.start()
                     correctingToday = false
-                    tick++
                 }
             } else {
                 null
@@ -234,7 +252,7 @@ private fun SummaryCard(year: Int, data: YearData?, onYearChange: (Int) -> Unit,
                 Text(range, fontSize = 12.sp, color = Td.Muted)
             }
             Row(verticalAlignment = Alignment.Bottom) {
-                BigStat(data?.stats?.recordedDays?.toString() ?: "–", "天已记录")
+                BigStat(data?.stats?.let { DayCounting.formatDays(it.recordedDays) } ?: "–", "天已记录")
                 Spacer(Modifier.width(26.dp))
                 BigStat(data?.stats?.cities?.size?.toString() ?: "–", "个城市")
                 Spacer(Modifier.weight(1f))
@@ -288,12 +306,17 @@ private fun TodayCard(data: YearData?, onCorrect: () -> Unit) {
                     )
                 }
             }
+            // 补捕窗口已关的半天不会再自动补上,别再显示「待记录」让人白等
+            val pending = PunchRules.pendingSlots(LocalTime.now().hour)
             Row {
-                PunchCell(R.drawable.ic_sun, Color(0xFFA9762F), "早 · 07:00", morning, Modifier.weight(1f))
+                PunchCell(
+                    R.drawable.ic_sun, Color(0xFFA9762F), "早 · 07:00", morning,
+                    Slot.MORNING in pending, Modifier.weight(1f),
+                )
                 Box(Modifier.width(1.dp).height(40.dp).background(Td.Border))
                 PunchCell(
                     R.drawable.ic_sunset, Td.Faint, "晚 · 17:00", evening,
-                    Modifier.weight(1f).padding(start = 16.dp),
+                    Slot.EVENING in pending, Modifier.weight(1f).padding(start = 16.dp),
                 )
             }
             if (extra != null) {
@@ -302,12 +325,27 @@ private fun TodayCard(data: YearData?, onCorrect: () -> Unit) {
                     fontSize = 11.sp, color = Td.Faint,
                 )
             }
+            // 今天还没打完:单个样本先算 0.5 天,说明清楚免得以为少算了
+            val pendingHalf = data?.stats?.days?.get(today)?.shares?.singleOrNull()?.takeIf { it.weight == 0.5 }
+            if (pendingHalf != null) {
+                Text(
+                    if (evening == null) "今天先算半天 · 晚点打上后补满一天" else "今天先算半天 · 早点补上后补满一天",
+                    fontSize = 11.sp, color = Td.Faint,
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun PunchCell(iconRes: Int, iconTint: Color, label: String, punch: Punch?, modifier: Modifier) {
+private fun PunchCell(
+    iconRes: Int,
+    iconTint: Color,
+    label: String,
+    punch: Punch?,
+    stillPossible: Boolean,
+    modifier: Modifier,
+) {
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         Icon(painterResource(iconRes), null, Modifier.size(20.dp), tint = iconTint)
         Spacer(Modifier.width(10.dp))
@@ -320,7 +358,10 @@ private fun PunchCell(iconRes: Int, iconTint: Color, label: String, punch: Punch
                     Icon(painterResource(R.drawable.ic_check), null, Modifier.size(14.dp), tint = Td.Accent)
                 }
             } else {
-                Text("待记录", fontSize = 14.sp, color = Td.Faint)
+                Text(
+                    if (stillPossible) "待记录" else "未记录",
+                    fontSize = 14.sp, color = Td.Faint,
+                )
             }
         }
     }

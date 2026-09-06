@@ -132,8 +132,11 @@ fun ExportScreen(initialYear: Int, onBack: () -> Unit) {
                 }
             }
             item {
+                // 有任何内容的日子都能预览:首装当天只有首点、纯手动补记的日子此前被滤掉,
+                // 导出页会完全没有预览
                 val rows = data?.let { Exporter.dailyRows(it.stats, it.punches) }
-                    ?.filter { it.morning != null || it.evening != null }?.takeLast(3)
+                    ?.filter { it.morning != null || it.evening != null || it.extra != null || it.attribution.shares.isNotEmpty() }
+                    ?.takeLast(3)
                 if (!rows.isNullOrEmpty()) {
                     TdCard(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -143,7 +146,7 @@ fun ExportScreen(initialYear: Int, onBack: () -> Unit) {
                                 PreviewRow(
                                     listOf(
                                         "%02d-%02d".format(r.date.monthValue, r.date.dayOfMonth),
-                                        r.morning?.cityName ?: "–",
+                                        r.morning?.cityName ?: r.extra?.cityName?.let { "首 $it" } ?: "–",
                                         r.evening?.cityName ?: "–",
                                         r.attribution.shares.joinToString(" ") {
                                             it.cityName + (if (it.weight >= 1.0) " +1" else " +0.5")

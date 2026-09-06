@@ -94,4 +94,13 @@ class CityResolverTest {
     fun `空候选返回空`() {
         assertNull(CityResolver.resolve(emptyList(), 30.0, prevSz()))
     }
+
+    @Test
+    fun `锚点时间戳在未来时不粘`() {
+        // 时钟回拨或导入了别人机器上的未来记录 → ageHours 为负,此前会让粘滞链永远有效
+        val candidates = listOf(m(sz, "深圳", 1.0), m(hk, "香港", 1.6))
+        val r = CityResolver.resolve(candidates, 50.0, CityResolver.Prev(hk, ageHours = -5.0))!!
+        assertEquals(sz, r.match.cityKey)
+        assertFalse(r.viaContext)
+    }
 }

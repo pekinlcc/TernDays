@@ -183,6 +183,34 @@ object MigrationLink {
         override fun hashCode(): Int = 31 * (31 * addresses.hashCode() + port) + key.contentHashCode()
     }
 
+    /**
+     * 迁移只走局域网。二维码里的地址必须是私网/链路本地地址——
+     * 否则一张伪造的二维码就能把应用引到任意公网主机,既破坏「零联网」承诺,
+     * 又能往用户库里塞记录。
+     */
+    fun isLanAddress(address: String): Boolean {
+        val a = address.trim().substringBefore('%') // 去掉 IPv6 的 zone id
+        if (a.isEmpty()) return false
+        if (a.contains(':')) {
+            val lower = a.lowercase()
+            return lower == "::1" ||
+                lower.startsWith("fe80:") || // 链路本地
+                lower.startsWith("fd") || lower.startsWith("fc") // 唯一本地地址 fc00::/7
+        }
+        val parts = a.split('.')
+        if (parts.size != 4) return false
+        val n = parts.map { it.toIntOrNull() ?: return false }
+        if (n.any { it !in 0..255 }) return false
+        return when {
+            n[0] == 10 -> true
+            n[0] == 127 -> true
+            n[0] == 192 && n[1] == 168 -> true
+            n[0] == 172 && n[1] in 16..31 -> true
+            n[0] == 169 && n[1] == 254 -> true // 链路本地
+            else -> false
+        }
+    }
+
     fun build(addresses: List<String>, port: Int, key: ByteArray): String {
         require(addresses.isNotEmpty() && port in 1..65535 && key.size == MigrationCrypto.KEY_BYTES)
         val k = Base64.getUrlEncoder().withoutPadding().encodeToString(key)
@@ -206,7 +234,9 @@ object MigrationLink {
         } catch (_: IllegalArgumentException) {
             return null
         }
-        if (addresses.isEmpty() || key.size != MigrationCrypto.KEY_BYTES) return null
-        return Link(addresses, port, key)
+        // 只接受局域网地址:公网地址的二维码一律当作非法码
+        val lan = addresses.filter { isLanAddress(it) }
+        if (lan.isEmpty() || key.size != MigrationCrypto.KEY_BYTES) return null
+        return Link(lan, port, key)
     }
 }

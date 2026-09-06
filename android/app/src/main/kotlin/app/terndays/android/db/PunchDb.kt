@@ -8,6 +8,7 @@ import android.database.sqlite.SQLiteOpenHelper
 import app.terndays.core.CityMatcher
 import app.terndays.core.DayOverride
 import app.terndays.core.HistoryReplay
+import app.terndays.core.MergeRules
 import app.terndays.core.OverrideScope
 import app.terndays.core.Punch
 import app.terndays.core.Slot
@@ -115,6 +116,15 @@ class PunchDb private constructor(context: Context) :
         return writableDatabase.insertWithOnConflict("punch", null, values, SQLiteDatabase.CONFLICT_IGNORE) != -1L
     }
 
+    /** 全库最早一条记录(打卡或手动更正)的日期:跨年后 1 月初的漏记要靠它才认得出来。 */
+    fun earliestRecordDate(): LocalDate? =
+        readableDatabase.rawQuery(
+            "SELECT MIN(d) FROM (SELECT MIN(local_date) AS d FROM punch UNION ALL SELECT MIN(local_date) FROM day_override)",
+            null,
+        ).use { c ->
+            if (c.moveToNext() && !c.isNull(0)) runCatching { LocalDate.parse(c.getString(0)) }.getOrNull() else null
+        }
+
     fun hasAnyPunch(): Boolean =
         readableDatabase.rawQuery("SELECT 1 FROM punch LIMIT 1", null).use { it.moveToFirst() }
 
@@ -216,7 +226,8 @@ class PunchDb private constructor(context: Context) :
     data class MergeResult(val punchesAdded: Int, val punchesSkipped: Int, val overridesAdded: Int, val overridesSkipped: Int)
 
     /**
-     * 迁移导入合并:打卡按 (日期, 时段) 去重、手动记录按日期去重,本机已有的一律保留。
+     * 迁移导入合并:打卡按 (日期, 时段)、手动记录按 (日期, 范围) 去重,本机已有的一律保留;
+     * 合并判定见 :core MergeRules(双端同一套,且不破坏整天/半天互斥)。
      * 单事务执行,失败整体回滚。
      */
     fun mergeImported(punches: List<Punch>, overrides: List<DayOverride>): MergeResult {
@@ -231,15 +242,19 @@ class PunchDb private constructor(context: Context) :
                 if (insertPunch(p)) pAdd++ else pSkip++
             }
             for (o in overrides) {
-                val exists = db.rawQuery(
-                    "SELECT 1 FROM day_override WHERE local_date=? LIMIT 1",
-                    arrayOf(o.localDate.toString()),
-                ).use { it.moveToFirst() }
-                if (exists) {
-                    oSkip++
-                } else {
-                    setOverride(o)
+                // 按 (日期, 范围) 判定:本机已有的保留,另半天可以补进来,
+                // 但绝不让导入把整天与半天更正凑到同一天(见 MergeRules)
+                if (MergeRules.shouldImportOverride(overrideScopesFor(o.localDate), o.scope)) {
+                    val values = ContentValues().apply {
+                        put("local_date", o.localDate.toString())
+                        put("scope", o.scope.name)
+                        put("city_key", o.cityKey)
+                        put("city_name", o.cityName)
+                    }
+                    db.insertWithOnConflict("day_override", null, values, SQLiteDatabase.CONFLICT_REPLACE)
                     oAdd++
+                } else {
+                    oSkip++
                 }
             }
             db.setTransactionSuccessful()
@@ -256,6 +271,19 @@ class PunchDb private constructor(context: Context) :
         ).use { c ->
             val out = ArrayList<DayOverride>(c.count)
             while (c.moveToNext()) out.add(readOverride(c))
+            out
+        }
+
+    /** 该日期已有的更正范围(迁移合并判定用,见 MergeRules)。 */
+    fun overrideScopesFor(date: LocalDate): Set<OverrideScope> =
+        readableDatabase.rawQuery(
+            "SELECT scope FROM day_override WHERE local_date=?",
+            arrayOf(date.toString()),
+        ).use { c ->
+            val out = LinkedHashSet<OverrideScope>()
+            while (c.moveToNext()) {
+                runCatching { OverrideScope.valueOf(c.getString(0)) }.getOrNull()?.let { out.add(it) }
+            }
             out
         }
 

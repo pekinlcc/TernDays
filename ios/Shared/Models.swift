@@ -140,6 +140,9 @@ struct DayOverride: Codable {
 
     var scope: OverrideScope { scopeRaw ?? .full }
 
+    /// 列表行的稳定 id：同一天的两条半天更正必须区分开
+    var rowId: String { "\(localDate)|\(scope.rawValue)" }
+
     enum CodingKeys: String, CodingKey {
         case localDate, cityKey, cityName
         case scopeRaw = "scope"
@@ -178,8 +181,11 @@ struct YearStats {
     let year: Int
     let firstDate: LocalDate
     let lastDate: LocalDate
-    let recordedDays: Int
+    /// 已记录天数（= 各城市天数之和；跨城日 0.5+0.5，进行中的今天可能是 0.5）
+    let recordedDays: Double
     let cities: [CityStat]
     let unrecordedDates: [LocalDate]
     let days: [LocalDate: DayAttribution]
+    /// 「开始使用」之日：早于它的日子既不算漏记，也不出现在导出的每日明细里
+    var trackingSince: LocalDate? = nil
 }

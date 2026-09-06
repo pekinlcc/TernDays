@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 一层实心底面,无描边 / 阴影 / 高光;圆角跟系统 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="@color/widgetBg" />
-    <corners android:radius="20dp" />
+    <solid android:color="@color/widgetSurface" />
+    <corners android:radius="@dimen/widget_corner" />
 </shape>

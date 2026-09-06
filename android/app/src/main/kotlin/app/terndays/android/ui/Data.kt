@@ -9,6 +9,7 @@ import app.terndays.core.YearStats
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
+import java.time.LocalTime
 
 data class YearData(
     val stats: YearStats,
@@ -21,6 +22,13 @@ suspend fun loadYearData(context: Context, year: Int): YearData = withContext(Di
     val db = PunchDb.get(context)
     val punches = db.punchesForYear(year)
     val overrides = db.overridesForYear(year)
-    val stats = DayCounting.computeYearStats(year, LocalDate.now(), punches, overrides)
+    // nowHour:今天还没打完的半天不算漏记,单点先按 0.5 天计
+    // (导出走的是同一份统计,所以导出里的今天也是 0.5,并在备注里标「今天进行中」)
+    // earliestRecordDate:跨年后 1 月初的漏记要靠全库最早记录才认得出来
+    val stats = DayCounting.computeYearStats(
+        year, LocalDate.now(), punches, overrides,
+        nowHour = LocalTime.now().hour,
+        earliestRecordDate = db.earliestRecordDate(),
+    )
     YearData(stats, punches, overrides, db.yearsWithData(LocalDate.now().year))
 }

@@ -146,7 +146,12 @@ fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
             date = target,
             currentCityName = current?.shares?.joinToString(" + ") { it.cityName },
             recentCities = d?.stats?.cities?.map { it.cityKey to it.cityName } ?: emptyList(),
-            hasBothHalves = dayPunches.any { it.slot == Slot.MORNING } && dayPunches.any { it.slot == Slot.EVENING },
+            hasBothHalves = DayCounting.halfSampleFlags(
+                dayPunches.firstOrNull { it.slot == Slot.MORNING },
+                dayPunches.firstOrNull { it.slot == Slot.EVENING },
+                dayPunches.firstOrNull { it.slot == Slot.EXTRA },
+            ).let { it.first || it.second },
+            existing = d?.overrides?.filter { it.localDate == target } ?: emptyList(),
             onDismiss = { correcting = null },
             onPick = { key, name, scope ->
                 PunchDb.get(context).setOverride(DayOverride(target, key, name, scope))
@@ -338,6 +343,8 @@ private fun DetailListCard(
                             x?.let { it.epochMs to "首 ${punchClock(it)} ${it.cityName}" },
                         ).sortedBy { it.first }.joinToString(" · ") { it.second }
                         val sub = when {
+                            !day.manual && day.weight < 1.0 && date == LocalDate.now() && listOfNotNull(m, e).size < 2 ->
+                                "$detail · 今天先算半天,另半天打上后补满"
                             day.manual && detail.isEmpty() -> "手动补记"
                             day.manual -> "已手动更正 · 当天打卡:$detail"
                             detail.isEmpty() -> "无打卡记录"
@@ -345,8 +352,12 @@ private fun DetailListCard(
                         }
                         Text(sub, fontSize = 12.sp, color = Td.Muted)
                     }
+                    // 进行中的今天是"暂时算半天",与跨城日的半天不是一回事,标签要区分
+                    val inProgressToday = !day.manual && day.weight < 1.0 && date == LocalDate.now() &&
+                        listOfNotNull(m, e).size < 2
                     val (label, bg, fg) = when {
                         day.manual -> Triple("手动", Td.WarmSoft, Td.WarmDeep)
+                        inProgressToday -> Triple("进行中", Td.WarmSoft, Td.WarmDeep)
                         day.weight >= 1.0 -> Triple("全天", Td.AccentSoft, Td.AccentDeep)
                         else -> Triple("半天", Td.AccentSoft, Td.AccentDeep)
                     }

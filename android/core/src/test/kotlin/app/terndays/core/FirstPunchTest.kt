@@ -96,7 +96,7 @@ class FirstPunchTest {
             punch("2026-09-02", Slot.EVENING, "上海", 17),
         )
         val stats = DayCounting.computeYearStats(2026, LocalDate.parse("2026-09-02"), punches, emptyList())
-        assertEquals(2, stats.recordedDays)
+        assertEquals(2.0, stats.recordedDays)
         assertEquals("上海", stats.cities.single().cityName)
         assertEquals(2.0, stats.cities.single().days)
     }

@@ -18,7 +18,9 @@ enum Exporter {
             if let cur = bySlot[k], cur.epochMs <= p.epochMs { continue }
             bySlot[k] = p
         }
-        return stats.days.keys.sorted().map { date in
+        // 「开始使用」之前的日子不是漏记,不写进明细(与汇总里的无记录天数保持一致)
+        let since = stats.trackingSince
+        return stats.days.keys.sorted().filter { since == nil || $0 >= since! }.map { date in
             DailyRow(
                 date: date,
                 morning: bySlot["\(date)|\(Slot.morning.rawValue)"],
@@ -40,7 +42,10 @@ enum Exporter {
         for c in stats.cities {
             rows.append([c.cityName, DayCounting.formatDays(c.days), String(c.fullDays), String(c.halfDays)])
         }
-        rows.append(["（无记录天数）", String(stats.unrecordedDates.count), "", ""])
+        // 无记录天数不再塞进城市表的「天数」列,单独一段并给出合计
+        rows.append(["", "", "", ""])
+        rows.append(["合计（天）", DayCounting.formatDays(stats.recordedDays), "", ""])
+        rows.append(["无记录天数", "", "", String(stats.unrecordedDates.count)])
         return rows
     }
 
@@ -49,6 +54,10 @@ enum Exporter {
         for r in dailyRows(stats: stats, punches: punches) {
             var notes: [String] = []
             if r.attribution.manual { notes.append("手动更正/补记") }
+            // 进行中的今天先计 0.5,别和跨城的 0.5 混为一谈
+            if !r.attribution.manual, r.attribution.shares.count == 1, r.attribution.shares[0].weight == 0.5 {
+                notes.append("今天进行中，先计半天")
+            }
             if r.morning?.delayed == true { notes.append("早点延迟") }
             if r.evening?.delayed == true { notes.append("晚点延迟") }
             if r.morning?.fromCache == true || r.evening?.fromCache == true || r.extra?.fromCache == true {

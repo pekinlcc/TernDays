@@ -14,7 +14,24 @@ struct SettingsView: View {
     @State private var importResult: String?
     @State private var importResultTitle = ""
 
-    private var year: Int { LocalDate.today().year }
+    /// 年份可切换:此前写死当前年,往年的无记录日在应用里根本补不了
+    @State private var year: Int = LocalDate.today().year
+
+    /// 同一天可能有上/下两条半天更正:排序键与 ForEach 的 id 都要带上范围,
+    /// 否则两行撞 ID 只显示一条,文案也完全一样
+    private var sortedOverrides: [DayOverride] {
+        (data?.overrides ?? []).sorted {
+            $0.localDate == $1.localDate ? $0.scope.rawValue < $1.scope.rawValue : $0.localDate > $1.localDate
+        }
+    }
+
+    private func scopeLabel(_ scope: OverrideScope) -> String {
+        switch scope {
+        case .full: return "整天"
+        case .morning: return "上半天"
+        case .evening: return "下半天"
+        }
+    }
 
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
@@ -56,7 +73,7 @@ struct SettingsView: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("补记无记录的日子")
                                         .font(.system(size: 14, weight: .semibold)).foregroundColor(Td.ink)
-                                    Text("今年还有 \(data?.stats.unrecordedDates.count ?? 0) 天没有任何记录")
+                                    Text("\(String(year)) 年还有 \(data?.stats.unrecordedDates.count ?? 0) 天没有任何记录")
                                         .font(.system(size: 12)).foregroundColor(Td.muted)
                                 }
                                 Spacer()
@@ -67,19 +84,41 @@ struct SettingsView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        // 往年也能补记:切到那一年即可
+                        if let years = data?.years, years.count > 1 {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(years, id: \.self) { y in
+                                        Button {
+                                            year = y
+                                            reload()
+                                        } label: {
+                                            Text("\(String(y)) 年")
+                                                .font(.system(size: 12, weight: y == year ? .semibold : .regular))
+                                                .foregroundColor(y == year ? Td.onAccent : Td.muted)
+                                                .padding(.horizontal, 12).padding(.vertical, 6)
+                                                .background(y == year ? Td.accent : Td.bg)
+                                                .clipShape(Capsule())
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                            .padding(.bottom, 10)
+                        }
                         Divider().overlay(Td.divider)
                         Text("记录的城市不对？在首页「今日打卡」点「纠正」，或到城市详情里点那一天即可更正")
                             .font(.system(size: 12)).foregroundColor(Td.muted)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.vertical, 12)
-                        ForEach(data?.overrides.sorted(by: { $0.localDate > $1.localDate }) ?? [], id: \.localDate) { o in
+                        ForEach(sortedOverrides, id: \.rowId) { o in
                             Divider().overlay(Td.divider)
                             HStack {
-                                Text("\(o.localDate.month)月\(o.localDate.day)日 → \(o.cityName)（手动）")
+                                Text("\(o.localDate.month)月\(o.localDate.day)日 · \(scopeLabel(o.scope)) → \(o.cityName)")
                                     .font(.system(size: 13)).foregroundColor(Td.ink)
                                 Spacer()
                                 Button("恢复自动") {
-                                    DataStore.shared.removeOverride(date: o.localDate)
+                                    DataStore.shared.removeOverride(date: o.localDate, scope: o.scope)
                                     WidgetCenter.shared.reloadAllTimelines()
                                     reload()
                                 }

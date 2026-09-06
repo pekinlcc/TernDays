@@ -50,7 +50,9 @@ object CityResolver {
         val runnerUp = candidates.getOrNull(1)
         val ambiguous = runnerUp != null && runnerUp.distanceKm - top1.distanceKm < ambiguousMargin
 
-        val prevValid = prev != null && prev.ageHours <= MAX_PREV_AGE_HOURS
+        // ageHours 为负 = 上一条打卡的时间戳在"未来"(时钟回拨、或导入了别人机器上的未来记录):
+        // 这种锚点不可信,直接不粘,否则粘滞链会永远有效
+        val prevValid = prev != null && prev.ageHours in 0.0..MAX_PREV_AGE_HOURS
         if (!prevValid || prev!!.cityKey == top1.cityKey) {
             return Resolution(top1, viaContext = false, ambiguous = ambiguous)
         }

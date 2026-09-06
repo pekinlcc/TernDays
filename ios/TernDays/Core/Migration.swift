@@ -98,6 +98,25 @@ enum MigrationLink {
         return schemePrefix + "v=1&a=" + addresses.joined(separator: ",") + "&p=\(port)&k=" + k
     }
 
+    /// 迁移只走局域网:二维码里的地址必须是私网/链路本地地址（与 :core MigrationLink.isLanAddress 对齐）。
+    static func isLanAddress(_ address: String) -> Bool {
+        let a = String(address.trimmingCharacters(in: .whitespaces).split(separator: "%").first ?? "")
+        if a.isEmpty { return false }
+        if a.contains(":") {
+            let lower = a.lowercased()
+            return lower == "::1" || lower.hasPrefix("fe80:") || lower.hasPrefix("fd") || lower.hasPrefix("fc")
+        }
+        let parts = a.split(separator: ".").map { Int($0) }
+        guard parts.count == 4, !parts.contains(where: { $0 == nil }) else { return false }
+        let n = parts.map { $0! }
+        guard !n.contains(where: { $0 < 0 || $0 > 255 }) else { return false }
+        if n[0] == 10 || n[0] == 127 { return true }
+        if n[0] == 192 && n[1] == 168 { return true }
+        if n[0] == 172 && (16...31).contains(n[1]) { return true }
+        if n[0] == 169 && n[1] == 254 { return true }
+        return false
+    }
+
     static func parse(_ text: String) -> Link? {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard t.hasPrefix(schemePrefix) else { return nil }
@@ -111,7 +130,7 @@ enum MigrationLink {
               let a = params["a"],
               let p = params["p"], let port = UInt16(p), port > 0,
               let k = params["k"] else { return nil }
-        let addresses = a.split(separator: ",").map(String.init).filter { !$0.isEmpty }
+        let addresses = a.split(separator: ",").map(String.init).filter { !$0.isEmpty && isLanAddress($0) }
         guard !addresses.isEmpty else { return nil }
         var b64 = k.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         while b64.count % 4 != 0 { b64 += "=" }

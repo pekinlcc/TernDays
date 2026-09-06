@@ -81,6 +81,9 @@ object MigrateClient {
                 var remapped = 0
                 if (result.punchesAdded > 0) {
                     remapped = db.replayResolveAll(Cities.get(context))
+                }
+                // 只补进了手动更正的那次导入同样会改变天数:界面与小组件都要刷新
+                if (result.punchesAdded + result.overridesAdded > 0) {
                     TernDaysWidgetProvider.updateAll(context)
                     DataBus.bump()
                 }

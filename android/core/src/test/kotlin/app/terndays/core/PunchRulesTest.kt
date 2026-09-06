@@ -68,4 +68,14 @@ class PunchRulesTest {
         assertEquals(Slot.EVENING, PunchRules.slotToBackfill(evening, hasMorning = false, hasEvening = false))
         assertNull(PunchRules.slotToBackfill(evening, hasMorning = false, hasEvening = true))
     }
+
+    @Test
+    fun `还有机会补上的时段`() {
+        // 早点窗口 [07,12):未过 12 点两个半天都还有机会
+        assertEquals(setOf(Slot.MORNING, Slot.EVENING), PunchRules.pendingSlots(6))
+        assertEquals(setOf(Slot.MORNING, Slot.EVENING), PunchRules.pendingSlots(11))
+        // 过了 12 点早点补不上了;晚点窗口开到当天结束
+        assertEquals(setOf(Slot.EVENING), PunchRules.pendingSlots(12))
+        assertEquals(setOf(Slot.EVENING), PunchRules.pendingSlots(23))
+    }
 }

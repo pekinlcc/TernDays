@@ -9,8 +9,12 @@ enum HistoryReplay {
     static func replayAll(store: DataStore, matcher: CityMatcher) -> Int {
         let punches = store.allPunches().sorted { $0.epochMs < $1.epochMs }
         guard !punches.isEmpty else { return 0 }
+        // 只认整天更正(与 Android PunchDb.replayResolveAll 同口径);
+        // 同一天可以同时有上/下半天两条更正,uniqueKeysWithValues 会因重复键直接 trap,
+        // 这里先按 scope 过滤再用 uniquingKeysWith 兜底,任何重复都不会崩。
         let overrideByDate = Dictionary(
-            uniqueKeysWithValues: store.allOverrides().map { ($0.localDate, $0.cityKey) }
+            store.allOverrides().filter { $0.scope == .full }.map { ($0.localDate, $0.cityKey) },
+            uniquingKeysWith: { first, _ in first }
         )
 
         var outcomes: [(date: LocalDate, slot: Slot, key: String, name: String, via: Bool)] = []

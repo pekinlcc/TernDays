@@ -78,7 +78,17 @@ struct HomeView: View {
                 currentCityName: data?.stats.days[today]?.shares.map(\.cityName).joined(separator: " + "),
                 recentCities: data?.stats.cities.map { ($0.cityKey, $0.cityName) } ?? [],
                 hasOverride: data?.overrides.contains { $0.localDate == today } ?? false,
-                hasBothHalves: todayPunches.contains { $0.slot == .morning } && todayPunches.contains { $0.slot == .evening },
+                // 只要有半天样本就允许半天更正:进行中的今天只打了早点时,
+                // 整天更正会把还没到的晚点那半天一起吞掉
+                hasBothHalves: {
+                    let f = DayCounting.halfSampleFlags(
+                        morning: todayPunches.first { $0.slot == .morning },
+                        evening: todayPunches.first { $0.slot == .evening },
+                        extra: todayPunches.first { $0.slot == .extra }
+                    )
+                    return f.0 || f.1
+                }(),
+                existing: data?.overrides.filter { $0.localDate == today } ?? [],
                 onPick: { key, name, scope in
                     DataStore.shared.setOverride(DayOverride(localDate: today, cityKey: key, cityName: name, scope: scope))
                     WidgetCenter.shared.reloadAllTimelines()
@@ -126,7 +136,7 @@ struct HomeView: View {
                     }
                 }
                 HStack(alignment: .bottom, spacing: 26) {
-                    bigStat(value: data.map { String($0.stats.recordedDays) } ?? "–", label: "天已记录")
+                    bigStat(value: data.map { DayCounting.formatDays($0.stats.recordedDays) } ?? "–", label: "天已记录")
                     bigStat(value: data.map { String($0.stats.cities.count) } ?? "–", label: "个城市")
                     Spacer()
                     if let missing = data?.stats.unrecordedDates.count, missing > 0 {
@@ -169,14 +179,23 @@ struct HomeView: View {
                             .buttonStyle(.plain)
                     }
                 }
+                // 补捕窗口已关的半天不会再自动补上,别再显示「待记录」让人白等
+                let pending = PunchRules.pendingSlots(hour: Calendar.current.component(.hour, from: Date()))
                 HStack(spacing: 0) {
-                    punchCell(icon: "sun.max", tint: Color(hex: 0xA9762F), label: "早 · 07:00", punch: morning)
+                    punchCell(icon: "sun.max", tint: Color(hex: 0xA9762F), label: "早 · 07:00",
+                              punch: morning, stillPossible: pending.contains(.morning))
                     Rectangle().fill(Td.border).frame(width: 1, height: 40)
-                    punchCell(icon: "sunset", tint: Td.faint, label: "晚 · 17:00", punch: evening)
+                    punchCell(icon: "sunset", tint: Td.faint, label: "晚 · 17:00",
+                              punch: evening, stillPossible: pending.contains(.evening))
                         .padding(.leading, 16)
                 }
                 if let extra {
                     Text("首点 \(extra.clock) · \(extra.cityName) ✓（已记录当前位置）")
+                        .font(.system(size: 11)).foregroundColor(Td.faint)
+                }
+                // 今天还没打完:单个样本先算 0.5 天,说明清楚免得以为少算了
+                if let shares = data?.stats.days[today]?.shares, shares.count == 1, shares[0].weight == 0.5 {
+                    Text(evening == nil ? "今天先算半天 · 晚点打上后补满一天" : "今天先算半天 · 早点补上后补满一天")
                         .font(.system(size: 11)).foregroundColor(Td.faint)
                 }
             }
@@ -185,7 +204,8 @@ struct HomeView: View {
         }
     }
 
-    private func punchCell(icon: String, tint: Color, label: String, punch: Punch?) -> some View {
+    private func punchCell(icon: String, tint: Color, label: String, punch: Punch?,
+                           stillPossible: Bool = true) -> some View {
         HStack(spacing: 10) {
             Image(systemName: icon).font(.system(size: 17)).foregroundColor(tint)
             VStack(alignment: .leading, spacing: 2) {
@@ -197,7 +217,8 @@ struct HomeView: View {
                             .font(.system(size: 11, weight: .bold)).foregroundColor(Td.accent)
                     }
                 } else {
-                    Text("待记录").font(.system(size: 14)).foregroundColor(Td.faint)
+                    Text(stillPossible ? "待记录" : "未记录")
+                        .font(.system(size: 14)).foregroundColor(Td.faint)
                 }
             }
             Spacer(minLength: 0)

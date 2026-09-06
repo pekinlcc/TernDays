@@ -4,6 +4,8 @@ import java.time.LocalDate
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -97,5 +99,23 @@ class MigrationTest {
         assertNull(MigrationLink.parse("terndays://migrate?v=1&a=1.2.3.4&p=80&k=!!!"))
         // 密钥长度不对
         assertNull(MigrationLink.parse("terndays://migrate?v=1&a=1.2.3.4&p=80&k=AAAA"))
+    }
+
+    @Test
+    fun `二维码只接受局域网地址`() {
+        val key = ByteArray(MigrationCrypto.KEY_BYTES) { it.toByte() }
+        // 私网 / 链路本地可用
+        for (a in listOf("192.168.1.7", "10.0.0.3", "172.20.1.1", "169.254.3.4", "127.0.0.1", "fe80::1", "fd12::9")) {
+            assertTrue(MigrationLink.isLanAddress(a), a)
+            assertNotNull(MigrationLink.parse(MigrationLink.build(listOf(a), 4321, key)))
+        }
+        // 公网地址一律拒绝(伪造二维码不能把应用引到外网主机)
+        for (a in listOf("8.8.8.8", "203.0.113.9", "172.32.0.1", "2001:db8::1", "example.com")) {
+            assertFalse(MigrationLink.isLanAddress(a), a)
+        }
+        assertNull(MigrationLink.parse(MigrationLink.build(listOf("8.8.8.8"), 4321, key)))
+        // 混合时只保留局域网那条
+        val mixed = MigrationLink.parse(MigrationLink.build(listOf("8.8.8.8", "192.168.0.5"), 4321, key))
+        assertEquals(listOf("192.168.0.5"), mixed?.addresses)
     }
 }

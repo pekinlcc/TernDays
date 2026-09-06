@@ -63,8 +63,9 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
     /// 窗口内缺记录则取一次定位记录；SLC 唤醒时会带现成位置，直接用。
     /// 从未有过任何记录（首次安装）时，无论时段立即打一个「首点」（extra）。
     func punchIfNeeded(with location: CLLocation? = nil, completion: (() -> Void)? = nil) {
-        let now = Date()
-        let today = LocalDate(from: now, in: .current)
+        let decidedAt = Date()
+        let today = LocalDate(from: decidedAt, in: .current)
+        let now = decidedAt
         let backfill = PunchRules.slotToBackfill(
             now: now,
             hasMorning: DataStore.shared.hasPunch(date: today, slot: .morning),
@@ -75,24 +76,41 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
             completion?()
             return
         }
+        // 归属日期/时段/延迟都在这一刻定下:23:59 决定的晚点若 00:01 才拿到定位,
+        // 也仍然记在昨天的晚点上,不会跑去占第二天的槽位
+        let decision = Decision(
+            date: today,
+            slot: slot,
+            delayed: PunchRules.isDelayed(at: decidedAt, slot: slot)
+        )
         if let location {
-            record(slot: slot, location: location, fromCache: false)
+            record(decision, location: location, fromCache: false)
             completion?()
             return
         }
         requestOneShotLocation { [weak self] loc in
             guard let self else { completion?(); return }
             if let loc {
-                self.record(slot: slot, location: loc, fromCache: false)
+                self.record(decision, location: loc, fromCache: false)
             } else if let cached = self.lm.location,
                       Date().timeIntervalSince(cached.timestamp) < 6 * 3600 {
-                self.record(slot: slot, location: cached, fromCache: true)
+                self.record(decision, location: cached, fromCache: true)
+            } else if !self.hasAnyAuth {
+                // 权限被关掉是另一回事:提示要说清原因,别让用户以为是定位没搜到
+                self.notifyPermissionMissing()
             } else {
                 // 完全拿不到位置:提醒用户打开应用补打(对齐 Android 的失败通知)
                 self.notifyPunchFailed(slot: slot)
             }
             completion?()
         }
+    }
+
+    /// 一次打卡的「决策上下文」,与 Android PunchService.Decision 同义。
+    private struct Decision {
+        let date: LocalDate
+        let slot: Slot
+        let delayed: Bool
     }
 
     private func requestOneShotLocation(_ completion: @escaping (CLLocation?) -> Void) {
@@ -109,6 +127,14 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
         }
     }
 
+    /// 取消在途定位请求:代次 +1 让迟到回调作废,待决回调按失败收尾。
+    func cancelPendingLocation() {
+        DispatchQueue.main.async { [self] in
+            guard !pendingLocationCallbacks.isEmpty else { return }
+            flushLocationCallbacks(nil)
+        }
+    }
+
     /// 主线程:一次性取出全部待决回调并分发;代次 +1 使超时/迟到回调作废。
     private func flushLocationCallbacks(_ location: CLLocation?) {
         locationGeneration += 1
@@ -117,7 +143,15 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
         callbacks.forEach { $0(location) }
     }
 
-    private func record(slot: Slot, location: CLLocation, fromCache: Bool) {
+    private func record(_ decision: Decision, location: CLLocation, fromCache: Bool) {
+        // 城市库解析(3.4 万点最近邻)与 JSON 全量落盘都不该占主线程
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            recordSync(decision, location: location, fromCache: fromCache)
+        }
+    }
+
+    private func recordSync(_ decision: Decision, location: CLLocation, fromCache: Bool) {
+        let slot = decision.slot
         // 交叉验证：top-3 候选 + 上一次打卡的行程连续性 + 定位误差圈，
         // 消掉真实边界（深圳/香港、珠海/澳门…）附近的最近邻模糊
         let accuracy = location.horizontalAccuracy >= 0 ? location.horizontalAccuracy : nil
@@ -135,7 +169,7 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
         let match = resolution?.match
         let now = Date()
         let punch = Punch(
-            localDate: LocalDate(from: now, in: .current),
+            localDate: decision.date,
             slot: slot,
             epochMs: Int64(now.timeIntervalSince1970 * 1000),
             zoneId: TimeZone.current.identifier,
@@ -144,13 +178,15 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
             accuracyM: accuracy,
             cityKey: match?.cityKey ?? "unknown",
             cityName: match?.cityName ?? "未知位置",
-            delayed: PunchRules.isDelayed(at: now, slot: slot),
+            delayed: decision.delayed,
             fromCache: fromCache,
             viaContext: resolution?.viaContext ?? false
         )
         DataStore.shared.insertPunch(punch)
-        WidgetCenter.shared.reloadAllTimelines()
-        NotificationCenter.default.post(name: .terndaysDataChanged, object: nil)
+        DispatchQueue.main.async {
+            WidgetCenter.shared.reloadAllTimelines()
+            NotificationCenter.default.post(name: .terndaysDataChanged, object: nil)
+        }
     }
 
     // MARK: CLLocationManagerDelegate
@@ -170,12 +206,23 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
         }
     }
 
+    /// 定位权限被关掉时的提醒(与"没搜到定位"区分开)
+    private func notifyPermissionMissing() {
+        let content = UNMutableNotificationContent()
+        content.title = "打卡需要定位权限"
+        content.body = "定位权限被关闭了,请到系统设置里把 TernDays 的位置权限改为「始终」。"
+        content.sound = .default
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "punch-noauth", content: content, trigger: nil)
+        )
+    }
+
     /// 打卡失败提醒:打开应用会自动补打,也可手动补记
     private func notifyPunchFailed(slot: Slot) {
         let label = slot == .morning ? "早上 7 点" : (slot == .evening ? "下午 5 点" : "首次")
         let content = UNMutableNotificationContent()
         content.title = "\(label)打卡没成功"
-        content.body = "没拿到定位。打开 TernDays 会自动补打,也可在设置中手动补记。"
+        content.body = "没拿到定位。打开 TernDays 会立即补打;已过窗口的话可在首页点「纠正」手动指定城市。"
         content.sound = .default
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: "punch-failed", content: content, trigger: nil)
@@ -215,8 +262,19 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
                 return
             }
             self.scheduleBackgroundRefresh()
-            refresh.expirationHandler = { refresh.setTaskCompleted(success: false) }
-            self.punchIfNeeded { refresh.setTaskCompleted(success: true) }
+            // setTaskCompleted 调用两次会 crash:到期与完成竞争时只让第一个生效,
+            // 并且到期时取消在途定位请求(否则后台配额白白耗着)
+            var finished = false
+            let finish: (Bool) -> Void = { ok in
+                guard !finished else { return }
+                finished = true
+                refresh.setTaskCompleted(success: ok)
+            }
+            refresh.expirationHandler = {
+                self.cancelPendingLocation()
+                finish(false)
+            }
+            self.punchIfNeeded { finish(true) }
         }
     }
 
