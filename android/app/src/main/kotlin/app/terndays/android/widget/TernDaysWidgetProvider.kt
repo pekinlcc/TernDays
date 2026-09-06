@@ -11,9 +11,11 @@ import android.os.Bundle
 import android.view.View
 import android.widget.RemoteViews
 import app.terndays.android.R
+import app.terndays.android.Prefs
 import app.terndays.android.db.PunchDb
 import app.terndays.android.ui.MainActivity
 import app.terndays.core.DayCounting
+import app.terndays.core.WidgetStyle
 import app.terndays.core.WidgetSummary
 import java.time.LocalDate
 import java.time.ZoneId
@@ -166,8 +168,16 @@ class TernDaysWidgetProvider : AppWidgetProvider() {
             return WidgetSummary.build(stats)
         }
 
+        private fun layoutFor(style: WidgetStyle): Int = when (style) {
+            WidgetStyle.PLAIN -> R.layout.widget_style_plain
+            WidgetStyle.MATERIAL -> R.layout.widget_style_material
+            WidgetStyle.GRADIENT -> R.layout.widget_style_gradient
+        }
+
         private fun buildViews(context: Context, model: WidgetSummary.Model, heightDp: Int): RemoteViews {
-            val views = RemoteViews(context.packageName, R.layout.widget_terndays)
+            // 三种外观共用同一套层级与 id,只换布局(底面 drawable + 文字配色):
+            // 颜色写在布局 XML 里,由启动器按它自己的深浅模式解析,比运行时 setTextColor 可靠
+            val views = RemoteViews(context.packageName, layoutFor(Prefs.widgetStyle(context)))
             views.setTextViewText(R.id.widget_year, model.yearLabel)
 
             // 矮格子放不下三行就少显示一行,宁可少显示也不截断(0 = 启动器没给尺寸,按标准 2×2 处理)。

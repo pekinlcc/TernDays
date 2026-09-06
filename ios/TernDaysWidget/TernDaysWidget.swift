@@ -12,6 +12,35 @@ private enum WColor {
     static let accent = Color(uiColor: UIColor { trait in
         trait.userInterfaceStyle == .dark ? UIColor(rgb: 0x7CC0E8) : UIColor(rgb: 0x1F6289)
     })
+    /// 品牌渐变的两个色标(深浅各一组)
+    static let gradTop = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark ? UIColor(rgb: 0x1F5C7F) : UIColor(rgb: 0x2E7FA8)
+    })
+    static let gradBottom = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark ? UIColor(rgb: 0x0F3247) : UIColor(rgb: 0x1B5578)
+    })
+}
+
+/// 一套外观对应的文字配色。渐变底上不能再用 .primary/.secondary（那是给浅/深底面的语义色）。
+private struct WidgetPalette {
+    let primary: Color      // 城市名与天数
+    let secondary: Color    // 单位「天」、空态
+    let year: Color         // 年份眉题
+    let accentable: Bool    // 年份是否参与 iOS 18 着色模式
+
+    static func of(_ style: WidgetStyle) -> WidgetPalette {
+        switch style {
+        case .plain, .material:
+            return WidgetPalette(primary: .primary, secondary: .secondary, year: WColor.accent, accentable: true)
+        case .gradient:
+            return WidgetPalette(
+                primary: .white,
+                secondary: .white.opacity(0.72),
+                year: .white.opacity(0.85),
+                accentable: false
+            )
+        }
+    }
 }
 
 private extension UIColor {
@@ -102,12 +131,37 @@ struct TernProvider: TimelineProvider {
 private extension View {
     /// iOS 17+ 交给系统合成底面(自动拿到系统内容边距、StandBy / 锁屏自动去底);
     /// iOS 16 没有 containerBackground,手动补 16pt 边距与底色。
+    ///
+    /// 三种外观:素面 = 实心语义底;系统材质 = 真正的 .regularMaterial(壁纸由系统实时模糊,
+    /// iOS 16 回落素面);品牌渐变 = 竖向两色标。
     @ViewBuilder
-    func widgetBackgroundCompat() -> some View {
+    func widgetBackgroundCompat(_ style: WidgetStyle) -> some View {
         if #available(iOS 17.0, *) {
-            containerBackground(for: .widget) { WColor.surface }
+            switch style {
+            case .plain:
+                containerBackground(for: .widget) { WColor.surface }
+            case .material:
+                containerBackground(.regularMaterial, for: .widget)
+            case .gradient:
+                containerBackground(for: .widget) {
+                    LinearGradient(
+                        colors: [WColor.gradTop, WColor.gradBottom],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                }
+            }
         } else {
-            padding(16).background(WColor.surface)
+            switch style {
+            case .plain, .material: // iOS 16 没有系统材质,回落素面
+                padding(16).background(WColor.surface)
+            case .gradient:
+                padding(16).background(
+                    LinearGradient(
+                        colors: [WColor.gradTop, WColor.gradBottom],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                )
+            }
         }
     }
 }
@@ -117,19 +171,22 @@ private extension View {
 /// 整块唯一的品牌色是年份;不放应用名,不画圆角与装饰。
 struct TernDaysWidgetView: View {
     let entry: TernEntry
+    /// 用户在设置里选的外观（主应用与扩展共享同一份 App Group 偏好）
+    var style: WidgetStyle = WidgetStyle.current
+    private var palette: WidgetPalette { WidgetPalette.of(style) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(entry.yearLabel)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(WColor.accent)
-                .widgetAccentable()
+                .foregroundStyle(palette.year)
+                .widgetAccentable(palette.accentable)
                 .lineLimit(1)
 
             if entry.top.isEmpty {
                 Text("还没有打卡记录")
                     .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(palette.secondary)
                     .padding(.top, 8)
             } else {
                 // 行之间与末尾的 Spacer 平分余量:三行在格子里均匀铺开,不挤在顶部
@@ -142,8 +199,9 @@ struct TernDaysWidgetView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .foregroundStyle(palette.primary)
         .accessibilityElement(children: .combine)
-        .widgetBackgroundCompat()
+        .widgetBackgroundCompat(style)
     }
 
     private func row(_ c: TopCity) -> some View {
@@ -154,7 +212,7 @@ struct TernDaysWidgetView: View {
                 .minimumScaleFactor(0.8)
             Spacer(minLength: 0)
             (Text(c.days).font(.system(size: 20, weight: .semibold).monospacedDigit())
-                + Text(" 天").font(.system(size: 11)).foregroundColor(.secondary))
+                + Text(" 天").font(.system(size: 11)).foregroundColor(palette.secondary))
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
         }

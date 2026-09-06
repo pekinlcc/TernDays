@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  系统材质(近似):Android 小组件是静态快照,拿不到实时模糊,
+  只能用高不透明度(90%)的中性底近似"透一点壁纸"的观感。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/widgetMaterialBase" />
+    <corners android:radius="@dimen/widget_corner" />
+</shape>

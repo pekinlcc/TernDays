@@ -1,15 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  2×2 小组件:年份眉题 + 今年 Top 3 城市,三行等权重(同字号、同字重、同颜色)。
-  每行内部:城市名 15 + 天数 19 + 单位 11,基线对齐;右缘对齐成一列。
-  整块唯一的品牌色是年份;无描边 / 阴影 / 高光,边距 16dp,圆角跟系统。
+  2×2 小组件 · 系统材质(Android 近似)
+  三种外观共用同一套信息层级(年份眉题 + Top 3 城市三行等权重,城市名 15 / 天数 19 / 单位 11),
+  只换底面与文字配色。**这三个布局由同一份模板生成,改层级请三个一起改。**
+  底面:90% 不透明的中性色——小组件是静态快照,Android 做不出 iOS 那种真模糊,这里是近似。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="@drawable/widget_bg"
+    android:background="@drawable/widget_bg_material"
     android:padding="16dp">
 
     <TextView
@@ -174,6 +175,7 @@
             android:textSize="11sp"
             android:textColor="@color/widgetSecondary" />
     </LinearLayout>
+
 
     <FrameLayout
         android:layout_width="match_parent"

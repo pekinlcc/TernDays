@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 品牌渐变:一个色相、两个色阶的竖向渐变(angle=270 即自上而下),文字全白 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient
+        android:type="linear"
+        android:angle="270"
+        android:startColor="@color/widgetGradTop"
+        android:endColor="@color/widgetGradBottom" />
+    <corners android:radius="@dimen/widget_corner" />
+</shape>

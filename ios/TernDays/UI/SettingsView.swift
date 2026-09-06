@@ -16,6 +16,8 @@ struct SettingsView: View {
 
     /// 年份可切换:此前写死当前年,往年的无记录日在应用里根本补不了
     @State private var year: Int = LocalDate.today().year
+    /// 小组件外观(与扩展共享 App Group 偏好)
+    @State private var widgetStyle: WidgetStyle = WidgetStyle.current
 
     /// 同一天可能有上/下两条半天更正:排序键与 ForEach 的 id 都要带上范围,
     /// 否则两行撞 ID 只显示一条,文案也完全一样
@@ -62,6 +64,35 @@ struct SettingsView: View {
                         ) { openSystemSettings() }
                     }
                     .padding(.horizontal, 16)
+                }
+
+                Text("桌面小组件").font(.system(size: 13, weight: .medium)).foregroundColor(Td.muted)
+                    .padding(.leading, 2).padding(.top, 4)
+                TdCard {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("外观").font(.system(size: 14, weight: .semibold)).foregroundColor(Td.ink)
+                        HStack(spacing: 8) {
+                            ForEach(WidgetStyle.allCases, id: \.rawValue) { s in
+                                Button {
+                                    widgetStyle = s
+                                    WidgetStyle.current = s
+                                    WidgetCenter.shared.reloadAllTimelines()
+                                } label: {
+                                    Text(s.label)
+                                        .font(.system(size: 12, weight: s == widgetStyle ? .semibold : .regular))
+                                        .foregroundColor(s == widgetStyle ? Td.onAccent : Td.muted)
+                                        .padding(.horizontal, 12).padding(.vertical, 8)
+                                        .background(s == widgetStyle ? Td.accent : Td.bg)
+                                        .clipShape(Capsule())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        Text(widgetStyle.hint)
+                            .font(.system(size: 12)).foregroundColor(Td.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(16)
                 }
 
                 Text("手动补记与更正").font(.system(size: 13, weight: .medium)).foregroundColor(Td.muted)

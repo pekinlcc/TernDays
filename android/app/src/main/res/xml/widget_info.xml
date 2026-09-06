@@ -10,6 +10,6 @@
     android:resizeMode="horizontal|vertical"
     android:updatePeriodMillis="0"
     android:widgetCategory="home_screen"
-    android:initialLayout="@layout/widget_terndays"
+    android:initialLayout="@layout/widget_style_plain"
     android:previewLayout="@layout/widget_preview"
     android:description="@string/widget_desc" />
