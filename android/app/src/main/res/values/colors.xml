@@ -7,4 +7,12 @@
     <color name="widgetPrimary">#000000</color>
     <color name="widgetSecondary">#6E6E73</color>
     <color name="widgetAccent">#1F6289</color>
+    <!-- 系统材质(近似):90% 不透明的中性底 -->
+    <color name="widgetMaterialBase">#E6F5F7F9</color>
+    <!-- 品牌渐变:竖向两色标 + 白色文字三级 -->
+    <color name="widgetGradTop">#2E7FA8</color>
+    <color name="widgetGradBottom">#1B5578</color>
+    <color name="widgetOnBrand">#FFFFFF</color>
+    <color name="widgetOnBrandYear">#D9FFFFFF</color>
+    <color name="widgetOnBrandFaint">#B8FFFFFF</color>
 </resources>

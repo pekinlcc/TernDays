@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import app.terndays.android.DataBus
+import app.terndays.android.Prefs
 import app.terndays.android.R
 import app.terndays.android.db.PunchDb
 import app.terndays.android.geo.Cities
@@ -58,6 +59,7 @@ import app.terndays.android.util.VendorKeepAlive
 import app.terndays.core.DayOverride
 import app.terndays.core.MigrationLink
 import app.terndays.core.OverrideScope
+import app.terndays.core.WidgetStyle
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.Dispatchers
@@ -192,6 +194,53 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
                                 VendorKeepAlive.openAutoStartSettings(context)
                             }
                         }
+                    }
+                }
+            }
+
+            item {
+                Text(
+                    "桌面小组件", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Td.Muted,
+                    modifier = Modifier.padding(start = 2.dp, top = 4.dp),
+                )
+            }
+            item {
+                var style by remember { mutableStateOf(Prefs.widgetStyle(context)) }
+                TdCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("外观", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.Ink)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(
+                                WidgetStyle.PLAIN to "素面",
+                                WidgetStyle.MATERIAL to "系统材质",
+                                WidgetStyle.GRADIENT to "品牌渐变",
+                            ).forEach { (value, label) ->
+                                Text(
+                                    label,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (value == style) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = if (value == style) Td.OnAccent else Td.Muted,
+                                    modifier = Modifier.clip(RoundedCornerShape(999.dp))
+                                        .background(if (value == style) Td.Accent else Td.Bg)
+                                        .clickable {
+                                            style = value
+                                            Prefs.setWidgetStyle(context, value)
+                                            app.terndays.android.widget.TernDaysWidgetProvider.updateAll(context)
+                                        }
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                )
+                            }
+                        }
+                        Text(
+                            when (style) {
+                                WidgetStyle.PLAIN -> "实心底面，和系统自带的小组件同质，放在任何壁纸上都稳。"
+                                WidgetStyle.MATERIAL ->
+                                    "让壁纸透一点出来。小组件是静态快照，安卓做不出实时模糊，这里是接近的近似；" +
+                                        "花壁纸上会显脏，那就换回素面。"
+                                WidgetStyle.GRADIENT -> "品牌色竖向渐变、文字全白，一眼认得出，也不挑壁纸。"
+                            },
+                            fontSize = 12.sp, color = Td.Muted, lineHeight = 18.sp,
+                        )
                     }
                 }
             }
