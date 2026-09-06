@@ -66,6 +66,8 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <!-- 跨零点刷新:天数会在零点自己变化(昨天补满 1 天、元旦换年) -->
+                <action android:name="app.terndays.action.WIDGET_MIDNIGHT" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"

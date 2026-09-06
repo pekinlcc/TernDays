@@ -1,5 +1,6 @@
 import CoreImage.CIFilterBuiltins
 import SwiftUI
+import UIKit
 
 /// 旧手机:「迁移到新手机」页——展示二维码,等新手机扫码连入并取走数据。
 struct MigrateSendView: View {
@@ -54,8 +55,15 @@ struct MigrateSendView: View {
         .background(Td.bg)
         .navigationTitle("迁移到新手机")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { model.start() }
-        .onDisappear { model.stop() }
+        .onAppear {
+            model.start()
+            // 扫码要时间:这页不能熄屏,否则旧手机一黑屏传输就断了
+            UIApplication.shared.isIdleTimerDisabled = true
+        }
+        .onDisappear {
+            UIApplication.shared.isIdleTimerDisabled = false
+            model.stop()
+        }
     }
 }
 

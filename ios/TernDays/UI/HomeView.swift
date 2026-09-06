@@ -179,10 +179,14 @@ struct HomeView: View {
                             .buttonStyle(.plain)
                     }
                 }
+                // 补捕窗口已关的半天不会再自动补上,别再显示「待记录」让人白等
+                let pending = PunchRules.pendingSlots(hour: Calendar.current.component(.hour, from: Date()))
                 HStack(spacing: 0) {
-                    punchCell(icon: "sun.max", tint: Color(hex: 0xA9762F), label: "早 · 07:00", punch: morning)
+                    punchCell(icon: "sun.max", tint: Color(hex: 0xA9762F), label: "早 · 07:00",
+                              punch: morning, stillPossible: pending.contains(.morning))
                     Rectangle().fill(Td.border).frame(width: 1, height: 40)
-                    punchCell(icon: "sunset", tint: Td.faint, label: "晚 · 17:00", punch: evening)
+                    punchCell(icon: "sunset", tint: Td.faint, label: "晚 · 17:00",
+                              punch: evening, stillPossible: pending.contains(.evening))
                         .padding(.leading, 16)
                 }
                 if let extra {
@@ -200,7 +204,8 @@ struct HomeView: View {
         }
     }
 
-    private func punchCell(icon: String, tint: Color, label: String, punch: Punch?) -> some View {
+    private func punchCell(icon: String, tint: Color, label: String, punch: Punch?,
+                           stillPossible: Bool = true) -> some View {
         HStack(spacing: 10) {
             Image(systemName: icon).font(.system(size: 17)).foregroundColor(tint)
             VStack(alignment: .leading, spacing: 2) {
@@ -212,7 +217,8 @@ struct HomeView: View {
                             .font(.system(size: 11, weight: .bold)).foregroundColor(Td.accent)
                     }
                 } else {
-                    Text("待记录").font(.system(size: 14)).foregroundColor(Td.faint)
+                    Text(stillPossible ? "待记录" : "未记录")
+                        .font(.system(size: 14)).foregroundColor(Td.faint)
                 }
             }
             Spacer(minLength: 0)

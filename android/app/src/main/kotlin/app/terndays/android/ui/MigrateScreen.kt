@@ -1,6 +1,10 @@
 package app.terndays.android.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.graphics.Bitmap
+import android.view.WindowManager
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -21,9 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,7 +37,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.terndays.android.R
-import app.terndays.android.migrate.MigrateServer
+import app.terndays.android.migrate.MigrateSession
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
@@ -51,20 +53,30 @@ private sealed interface SendState {
 @Composable
 fun MigrateSendScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    var state by remember { mutableStateOf<SendState>(SendState.Preparing) }
+    val activity = remember(context) { context.findActivity() }
 
     DisposableEffect(Unit) {
-        val server = MigrateServer(
-            context,
-            onReady = { qrText -> state = SendState.Showing(qrBitmap(qrText), null) },
-            onStatus = { msg ->
-                (state as? SendState.Showing)?.let { state = it.copy(status = msg) }
-            },
-            onDone = { count -> state = SendState.Done(count) },
-            onError = { msg -> state = SendState.Failed(msg) },
-        )
-        server.start()
-        onDispose { server.stop() }
+        MigrateSession.start(context)
+        // 扫码要时间:这页不能熄屏,否则旧手机一黑屏传输就断了
+        activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            // 配置变更(旋转等)只是重建界面,服务要留着,否则密钥与端口会换掉
+            if (activity?.isChangingConfigurations != true) MigrateSession.stop()
+        }
+    }
+
+    val qrText by MigrateSession.qrText
+    val statusMsg by MigrateSession.status
+    val doneCount by MigrateSession.doneCount
+    val failure by MigrateSession.failure
+    // 二维码位图按内容缓存:重组时不重复编码
+    val qrBmp = remember(qrText) { qrText?.let { qrBitmap(it) } }
+    val state: SendState = when {
+        failure != null -> SendState.Failed(failure!!)
+        doneCount != null -> SendState.Done(doneCount!!)
+        qrBmp != null -> SendState.Showing(qrBmp, statusMsg)
+        else -> SendState.Preparing
     }
 
     Column(Modifier.fillMaxSize().background(Td.Bg).statusBarsPadding().padding(horizontal = 20.dp)) {
@@ -129,6 +141,15 @@ fun MigrateSendScreen(onBack: () -> Unit) {
             }
         }
     }
+}
+
+private fun Context.findActivity(): Activity? {
+    var c: Context? = this
+    while (c is ContextWrapper) {
+        if (c is Activity) return c
+        c = c.baseContext
+    }
+    return null
 }
 
 @Composable

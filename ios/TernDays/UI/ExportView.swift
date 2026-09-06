@@ -23,6 +23,8 @@ struct ExportView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     sectionLabel("导出范围")
+                    // 年份变多后早期年份此前点不到(Android v0.6.1 已修,这里补上)
+                    ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
                         ForEach(data?.years ?? [year], id: \.self) { y in
                             let selected = y == year
@@ -40,6 +42,7 @@ struct ExportView: View {
                                 )
                                 .onTapGesture { year = y }
                         }
+                    }
                     }
                     sectionLabel("文件格式")
                     HStack(spacing: 10) {
@@ -94,6 +97,10 @@ struct ExportView: View {
         .navigationTitle("导出数据")
         .navigationBarTitleDisplayMode(.inline)
         .task(id: year) { data = YearData.load(year: year) }
+        // 后台打卡、历史重解析都会改数据:回到这一页要重新读,别导出进页面时的旧快照
+        .onReceive(NotificationCenter.default.publisher(for: .terndaysDataChanged)) { _ in
+            data = YearData.load(year: year)
+        }
         .sheet(item: $shareURL) { url in
             ActivityView(items: [url])
         }

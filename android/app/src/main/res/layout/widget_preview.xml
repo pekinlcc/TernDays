@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  仅用于小组件选择器的预览:与真实布局同一套字号/间距,但填示例数据。
+  真实布局的文本是运行时填的,直接拿来做 previewLayout 会是一块空白。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/widget_bg"
+    android:padding="16dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:maxLines="1"
+        android:includeFontPadding="false"
+        android:fontFamily="sans-serif-medium"
+        android:text="@string/widget_preview_year"
+        android:textSize="12sp"
+        android:textColor="@color/widgetAccent" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="9dp"
+        android:orientation="horizontal"
+        android:baselineAligned="true">
+        <TextView
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:includeFontPadding="false"
+            android:fontFamily="sans-serif-medium"
+            android:text="@string/widget_preview_city_1"
+            android:textSize="15sp"
+            android:textColor="@color/widgetPrimary" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:includeFontPadding="false"
+            android:fontFamily="sans-serif-medium"
+            android:text="@string/widget_preview_days_1"
+            android:textSize="19sp"
+            android:textColor="@color/widgetPrimary" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="2dp"
+            android:includeFontPadding="false"
+            android:text="@string/widget_unit_day"
+            android:textSize="11sp"
+            android:textColor="@color/widgetSecondary" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:orientation="horizontal"
+        android:baselineAligned="true">
+        <TextView
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:includeFontPadding="false"
+            android:fontFamily="sans-serif-medium"
+            android:text="@string/widget_preview_city_2"
+            android:textSize="15sp"
+            android:textColor="@color/widgetPrimary" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:includeFontPadding="false"
+            android:fontFamily="sans-serif-medium"
+            android:text="@string/widget_preview_days_2"
+            android:textSize="19sp"
+            android:textColor="@color/widgetPrimary" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="2dp"
+            android:includeFontPadding="false"
+            android:text="@string/widget_unit_day"
+            android:textSize="11sp"
+            android:textColor="@color/widgetSecondary" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:orientation="horizontal"
+        android:baselineAligned="true">
+        <TextView
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:includeFontPadding="false"
+            android:fontFamily="sans-serif-medium"
+            android:text="@string/widget_preview_city_3"
+            android:textSize="15sp"
+            android:textColor="@color/widgetPrimary" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:includeFontPadding="false"
+            android:fontFamily="sans-serif-medium"
+            android:text="@string/widget_preview_days_3"
+            android:textSize="19sp"
+            android:textColor="@color/widgetPrimary" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="2dp"
+            android:includeFontPadding="false"
+            android:text="@string/widget_unit_day"
+            android:textSize="11sp"
+            android:textColor="@color/widgetSecondary" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+</LinearLayout>

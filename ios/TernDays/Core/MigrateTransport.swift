@@ -215,6 +215,10 @@ enum MigrateImportClient {
         conn.start(queue: queue)
     }
 
+    /// 接收端总超时:旧手机息屏或退到后台时对端不会再发数据,
+    /// 没有这个兜底就永久卡在不可取消的「正在接收数据…」蒙层上。
+    private static let receiveTimeout: TimeInterval = 60
+
     private static func transfer(
         conn: NWConnection,
         link: MigrationLink.Link,
@@ -223,9 +227,14 @@ enum MigrateImportClient {
         onDone: @escaping (Outcome) -> Void,
         onError: @escaping (String) -> Void
     ) {
+        let finished = Atomic(false)
         let fail: (String) -> Void = { msg in
+            guard finished.compareAndSet(expected: false, to: true) else { return }
             conn.cancel()
             DispatchQueue.main.async { onError(msg) }
+        }
+        queue.asyncAfter(deadline: .now() + receiveTimeout) {
+            fail("等待旧手机的数据超时了。请确认旧手机没有息屏、两台手机在同一个 Wi-Fi,然后重新扫码。")
         }
         var hello = MigrationLink.magicHello
         hello.append(MigrationCrypto.fingerprint(key: link.key))
@@ -255,11 +264,15 @@ enum MigrateImportClient {
                         var remapped = 0
                         if result.punchesAdded > 0 {
                             remapped = HistoryReplay.replayAll(store: DataStore.shared, matcher: Cities.matcher)
+                        }
+                        // 只补进了手动更正的那次导入同样会改变天数:界面与小组件都要刷新
+                        if result.punchesAdded + result.overridesAdded > 0 {
                             WidgetCenter.shared.reloadAllTimelines()
                             DispatchQueue.main.async {
                                 NotificationCenter.default.post(name: .terndaysDataChanged, object: nil)
                             }
                         }
+                        guard finished.compareAndSet(expected: false, to: true) else { return }
                         DispatchQueue.main.async { onDone(Outcome(result: result, remapped: remapped)) }
                     } catch {
                         fail(error.localizedDescription)
@@ -284,5 +297,18 @@ enum MigrateImportClient {
                 receiveExactly(conn, total: total, buffer: next, done: done)
             }
         }
+    }
+}
+
+/// 极小的线程安全布尔:超时与正常完成会并发争抢同一个收尾动作。
+private final class Atomic {
+    private let lock = NSLock()
+    private var value: Bool
+    init(_ initial: Bool) { value = initial }
+    func compareAndSet(expected: Bool, to newValue: Bool) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard value == expected else { return false }
+        value = newValue
+        return true
     }
 }

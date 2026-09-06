@@ -2,6 +2,7 @@ package app.terndays.android.widget
 
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
+import android.app.AlarmManager
 import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
@@ -15,6 +16,7 @@ import app.terndays.android.ui.MainActivity
 import app.terndays.core.DayCounting
 import app.terndays.core.WidgetSummary
 import java.time.LocalDate
+import java.time.ZoneId
 
 /**
  * 2×2 桌面小组件:今年 Top 3 城市及天数,三行等权重(同字号同色)。
@@ -28,10 +30,40 @@ class TernDaysWidgetProvider : AppWidgetProvider() {
         Thread {
             try {
                 push(context, manager, ids)
+                scheduleMidnightRefresh(context)
+            } catch (_: Throwable) {
+                // 裸线程里的异常会直接杀掉进程:小组件读库失败不该带崩应用
             } finally {
                 pending.finish()
             }
         }.start()
+    }
+
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == ACTION_MIDNIGHT) {
+            // 天数会在零点自己变化(昨天的半天补满 1 天、元旦换年),必须主动刷一次
+            val pending = goAsync()
+            Thread {
+                try {
+                    pushAllSync(context)
+                    scheduleMidnightRefresh(context)
+                } catch (_: Throwable) {
+                    // 同上:不能把进程带崩
+                } finally {
+                    pending.finish()
+                }
+            }.start()
+            return
+        }
+        super.onReceive(context, intent)
+    }
+
+    override fun onEnabled(context: Context) {
+        scheduleMidnightRefresh(context)
+    }
+
+    override fun onDisabled(context: Context) {
+        cancelMidnightRefresh(context)
     }
 
     /** 用户拖拽改尺寸后按新高度决定脚注显示几行。 */
@@ -60,11 +92,46 @@ class TernDaysWidgetProvider : AppWidgetProvider() {
         private const val HEIGHT_THREE_ROWS_DP = 134
         private const val HEIGHT_TWO_ROWS_DP = 106
 
+        const val ACTION_MIDNIGHT = "app.terndays.action.WIDGET_MIDNIGHT"
+        private const val MIDNIGHT_REQUEST_CODE = 2001
+
+        private fun midnightIntent(context: Context) = PendingIntent.getBroadcast(
+            context, MIDNIGHT_REQUEST_CODE,
+            Intent(context, TernDaysWidgetProvider::class.java).setAction(ACTION_MIDNIGHT),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        /**
+         * 排下一个零点的刷新。v0.9 起天数会随时间变化(进行中的今天先算 0.5,过了零点补满),
+         * 而刷新一直是纯打卡驱动的——不排这一次,凌晨到次日首次打卡之间小组件会一直少半天,
+         * 元旦凌晨甚至还写着去年。用非精确闹钟即可(差几分钟无所谓,也不耗电)。
+         */
+        fun scheduleMidnightRefresh(context: Context) {
+            val app = context.applicationContext
+            val manager = AppWidgetManager.getInstance(app)
+            if (manager.getAppWidgetIds(ComponentName(app, TernDaysWidgetProvider::class.java)).isEmpty()) return
+            val at = LocalDate.now().plusDays(1).atStartOfDay(ZoneId.systemDefault())
+                .toInstant().toEpochMilli() + 5_000
+            runCatching {
+                app.getSystemService(AlarmManager::class.java)
+                    .setAndAllowWhileIdle(AlarmManager.RTC, at, midnightIntent(app))
+            }
+        }
+
+        private fun cancelMidnightRefresh(context: Context) {
+            runCatching {
+                context.getSystemService(AlarmManager::class.java).cancel(midnightIntent(context.applicationContext))
+            }
+        }
+
         /** 打卡 / 补记后调用,后台线程刷新所有实例(应用进程存活场景)。 */
         fun updateAll(context: Context) {
             val app = context.applicationContext
             Thread {
-                runCatching { pushAllSync(app) }
+                runCatching {
+                    pushAllSync(app)
+                    scheduleMidnightRefresh(app)
+                }
             }.apply { isDaemon = true }.start()
         }
 
@@ -103,10 +170,12 @@ class TernDaysWidgetProvider : AppWidgetProvider() {
             val views = RemoteViews(context.packageName, R.layout.widget_terndays)
             views.setTextViewText(R.id.widget_year, model.yearLabel)
 
-            // 矮格子放不下三行就少显示一行,宁可少显示也不截断(0 = 启动器没给尺寸,按标准 2×2 处理)
+            // 矮格子放不下三行就少显示一行,宁可少显示也不截断(0 = 启动器没给尺寸,按标准 2×2 处理)。
+            // 阈值随系统字体缩放放大:大字号下每行更高,否则第三行会被裁掉。
+            val scale = context.resources.configuration.fontScale.coerceIn(1f, 2f)
             val maxRows = when {
-                heightDp == 0 || heightDp >= HEIGHT_THREE_ROWS_DP -> 3
-                heightDp >= HEIGHT_TWO_ROWS_DP -> 2
+                heightDp == 0 || heightDp >= HEIGHT_THREE_ROWS_DP * scale -> 3
+                heightDp >= HEIGHT_TWO_ROWS_DP * scale -> 2
                 else -> 1
             }
             for (i in CITY_ROW_IDS.indices) {
@@ -129,7 +198,8 @@ class TernDaysWidgetProvider : AppWidgetProvider() {
                 } else {
                     buildString {
                         append(model.yearLabel)
-                        model.topCities.forEach {
+                        // 只念真正显示出来的行,别念被收掉的城市
+                        model.topCities.take(maxRows).forEach {
                             append(",").append(it.name).append(" ").append(it.days).append(" ").append(unit)
                         }
                     }

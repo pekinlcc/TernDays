@@ -343,6 +343,8 @@ private fun DetailListCard(
                             x?.let { it.epochMs to "首 ${punchClock(it)} ${it.cityName}" },
                         ).sortedBy { it.first }.joinToString(" · ") { it.second }
                         val sub = when {
+                            !day.manual && day.weight < 1.0 && date == LocalDate.now() && listOfNotNull(m, e).size < 2 ->
+                                "$detail · 今天先算半天,另半天打上后补满"
                             day.manual && detail.isEmpty() -> "手动补记"
                             day.manual -> "已手动更正 · 当天打卡:$detail"
                             detail.isEmpty() -> "无打卡记录"
@@ -350,8 +352,12 @@ private fun DetailListCard(
                         }
                         Text(sub, fontSize = 12.sp, color = Td.Muted)
                     }
+                    // 进行中的今天是"暂时算半天",与跨城日的半天不是一回事,标签要区分
+                    val inProgressToday = !day.manual && day.weight < 1.0 && date == LocalDate.now() &&
+                        listOfNotNull(m, e).size < 2
                     val (label, bg, fg) = when {
                         day.manual -> Triple("手动", Td.WarmSoft, Td.WarmDeep)
+                        inProgressToday -> Triple("进行中", Td.WarmSoft, Td.WarmDeep)
                         day.weight >= 1.0 -> Triple("全天", Td.AccentSoft, Td.AccentDeep)
                         else -> Triple("半天", Td.AccentSoft, Td.AccentDeep)
                     }

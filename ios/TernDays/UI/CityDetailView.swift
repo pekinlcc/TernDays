@@ -223,12 +223,17 @@ struct CityDetailView: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text("\(date.month)月\(date.day)日 · \(date.weekdayCn)")
                                 .font(.system(size: 14, weight: .semibold)).foregroundColor(Td.ink)
-                            Text(subText(day: day, m: m, e: e, x: x))
+                                            Text(isInProgressToday(date: date, day: day, m: m, e: e)
+                                 ? subText(day: day, m: m, e: e, x: x) + " · 今天先算半天,另半天打上后补满"
+                                 : subText(day: day, m: m, e: e, x: x))
                                 .font(.system(size: 12)).foregroundColor(Td.muted)
                         }
                         Spacer()
+                        // 进行中的今天是"暂时算半天",与跨城日的半天不是一回事
                         if day.manual {
                             TagView(text: "手动", bg: Td.warmSoft, fg: Td.warmDeep)
+                        } else if isInProgressToday(date: date, day: day, m: m, e: e) {
+                            TagView(text: "进行中", bg: Td.warmSoft, fg: Td.warmDeep)
                         } else if day.weight >= 1.0 {
                             TagView(text: "全天", bg: Td.accentSoft, fg: Td.accentDeep)
                         } else {
@@ -242,6 +247,10 @@ struct CityDetailView: View {
             }
             .padding(.horizontal, 16)
         }
+    }
+
+    private func isInProgressToday(date: LocalDate, day: CityDay, m: Punch?, e: Punch?) -> Bool {
+        !day.manual && day.weight < 1.0 && date == LocalDate.today() && [m, e].compactMap { $0 }.count < 2
     }
 
     private func subText(day: CityDay, m: Punch?, e: Punch?, x: Punch?) -> String {

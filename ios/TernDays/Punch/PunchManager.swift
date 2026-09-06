@@ -144,6 +144,13 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
     }
 
     private func record(_ decision: Decision, location: CLLocation, fromCache: Bool) {
+        // 城市库解析(3.4 万点最近邻)与 JSON 全量落盘都不该占主线程
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            recordSync(decision, location: location, fromCache: fromCache)
+        }
+    }
+
+    private func recordSync(_ decision: Decision, location: CLLocation, fromCache: Bool) {
         let slot = decision.slot
         // 交叉验证：top-3 候选 + 上一次打卡的行程连续性 + 定位误差圈，
         // 消掉真实边界（深圳/香港、珠海/澳门…）附近的最近邻模糊
@@ -176,8 +183,10 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
             viaContext: resolution?.viaContext ?? false
         )
         DataStore.shared.insertPunch(punch)
-        WidgetCenter.shared.reloadAllTimelines()
-        NotificationCenter.default.post(name: .terndaysDataChanged, object: nil)
+        DispatchQueue.main.async {
+            WidgetCenter.shared.reloadAllTimelines()
+            NotificationCenter.default.post(name: .terndaysDataChanged, object: nil)
+        }
     }
 
     // MARK: CLLocationManagerDelegate
@@ -213,7 +222,7 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
         let label = slot == .morning ? "早上 7 点" : (slot == .evening ? "下午 5 点" : "首次")
         let content = UNMutableNotificationContent()
         content.title = "\(label)打卡没成功"
-        content.body = "没拿到定位。打开 TernDays 会自动补打,也可在设置中手动补记。"
+        content.body = "没拿到定位。打开 TernDays 会立即补打;已过窗口的话可在首页点「纠正」手动指定城市。"
         content.sound = .default
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: "punch-failed", content: content, trigger: nil)

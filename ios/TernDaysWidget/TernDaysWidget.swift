@@ -43,7 +43,7 @@ struct TernEntry: TimelineEntry {
 struct TernProvider: TimelineProvider {
     func placeholder(in context: Context) -> TernEntry {
         TernEntry(
-            date: Date(), yearLabel: "2026 年",
+            date: Date(), yearLabel: "\(String(LocalDate.today().year)) 年",
             top: [
                 TopCity(id: 0, name: "北京", days: "152"),
                 TopCity(id: 1, name: "上海", days: "38.5"),
@@ -53,29 +53,45 @@ struct TernProvider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (TernEntry) -> Void) {
-        completion(context.isPreview ? placeholder(in: context) : load())
+        completion(context.isPreview ? placeholder(in: context) : load(at: Date()))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<TernEntry>) -> Void) {
-        let next = PunchRules.nextPunchDate().addingTimeInterval(30 * 60)
-        completion(Timeline(entries: [load()], policy: .after(next)))
+        let now = Date()
+        let nextPunch = PunchRules.nextPunchDate().addingTimeInterval(30 * 60)
+        var entries = [load(at: now)]
+        // v0.9 起天数会在零点自己变化(昨天的半天补满 1 天、元旦换年):
+        // 只按打卡时点刷新的话,凌晨到早上 7 点半会一直显示旧数字
+        if let midnight = Self.nextMidnight(after: now), midnight < nextPunch {
+            entries.append(load(at: midnight))
+        }
+        completion(Timeline(entries: entries, policy: .after(nextPunch)))
     }
 
-    private func load() -> TernEntry {
+    private static func nextMidnight(after date: Date) -> Date? {
+        var dc = DateComponents()
+        dc.hour = 0
+        dc.minute = 0
+        dc.second = 5
+        return Calendar.current.nextDate(after: date, matching: dc, matchingPolicy: .nextTime)
+    }
+
+    /// 按给定时刻算一份内容（零点那条时间线条目要按第二天算）。
+    private func load(at when: Date) -> TernEntry {
         // 小组件进程可能被系统复用:每次生成时间线前重读磁盘,避免展示主应用早已更新过的旧数据
         DataStore.shared.reloadFromDisk()
-        let today = LocalDate.today()
+        let day = LocalDate(from: when, in: .current)
         let stats = DayCounting.computeYearStats(
-            year: today.year,
-            today: today,
-            punches: DataStore.shared.punchesForYear(today.year),
-            overrides: DataStore.shared.overridesForYear(today.year),
-            nowHour: Calendar.current.component(.hour, from: Date()),
+            year: day.year,
+            today: day,
+            punches: DataStore.shared.punchesForYear(day.year),
+            overrides: DataStore.shared.overridesForYear(day.year),
+            nowHour: Calendar.current.component(.hour, from: when),
             earliestRecordDate: DataStore.shared.earliestRecordDate()
         )
         return TernEntry(
-            date: Date(),
-            yearLabel: "\(String(today.year)) 年",
+            date: when,
+            yearLabel: "\(String(day.year)) 年",
             top: stats.cities.prefix(3).enumerated().map { i, c in
                 TopCity(id: i, name: c.cityName, days: DayCounting.formatDays(c.days))
             }

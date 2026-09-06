@@ -25,7 +25,10 @@ class BootReceiver : BroadcastReceiver() {
                 val pending = goAsync()
                 Thread {
                     try {
-                        runCatching { TernDaysWidgetProvider.pushAllSync(context) }
+                        runCatching {
+                            TernDaysWidgetProvider.pushAllSync(context)
+                            TernDaysWidgetProvider.scheduleMidnightRefresh(context)
+                        }
                     } finally {
                         pending.finish()
                     }

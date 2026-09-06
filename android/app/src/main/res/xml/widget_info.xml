@@ -11,5 +11,5 @@
     android:updatePeriodMillis="0"
     android:widgetCategory="home_screen"
     android:initialLayout="@layout/widget_terndays"
-    android:previewLayout="@layout/widget_terndays"
+    android:previewLayout="@layout/widget_preview"
     android:description="@string/widget_desc" />
