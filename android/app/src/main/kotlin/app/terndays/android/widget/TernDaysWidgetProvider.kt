@@ -93,7 +93,8 @@ class TernDaysWidgetProvider : AppWidgetProvider() {
             val db = PunchDb.get(context)
             val stats = DayCounting.computeYearStats(
                 today.year, today, db.punchesForYear(today.year), db.overridesForYear(today.year),
-                java.time.LocalTime.now().hour,
+                nowHour = java.time.LocalTime.now().hour,
+                earliestRecordDate = db.earliestRecordDate(),
             )
             return WidgetSummary.build(stats)
         }

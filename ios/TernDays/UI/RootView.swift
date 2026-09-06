@@ -66,7 +66,8 @@ struct YearData {
         // 传入当前小时:今天还没打完的半天不算漏记,单点先按 0.5 天计
         let stats = DayCounting.computeYearStats(
             year: year, today: LocalDate.today(), punches: punches, overrides: overrides,
-            nowHour: Calendar.current.component(.hour, from: Date())
+            nowHour: Calendar.current.component(.hour, from: Date()),
+            earliestRecordDate: DataStore.shared.earliestRecordDate()
         )
         return YearData(
             stats: stats, punches: punches, overrides: overrides,

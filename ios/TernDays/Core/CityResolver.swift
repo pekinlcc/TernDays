@@ -38,7 +38,9 @@ enum CityResolver {
         let runnerUp = candidates.count > 1 ? candidates[1] : nil
         let ambiguous = runnerUp.map { $0.distanceKm - top1.distanceKm < ambiguousMargin } ?? false
 
-        guard let prev, prev.ageHours <= maxPrevAgeHours, prev.cityKey != top1.cityKey else {
+        // ageHours 为负 = 锚点时间戳在"未来"(时钟回拨 / 导入了别人机器上的未来记录):
+        // 这种锚点不可信,直接不粘,否则粘滞链会永远有效
+        guard let prev, prev.ageHours >= 0, prev.ageHours <= maxPrevAgeHours, prev.cityKey != top1.cityKey else {
             return Resolution(match: top1, viaContext: false, ambiguous: ambiguous)
         }
         guard let prevCand = candidates.first(where: { $0.cityKey == prev.cityKey }) else {

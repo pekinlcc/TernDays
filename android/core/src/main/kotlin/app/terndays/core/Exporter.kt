@@ -18,7 +18,7 @@ object Exporter {
     private fun weekday(d: LocalDate) = WEEK[d.dayOfWeek.value - 1]
 
     private fun punchTime(p: Punch): String =
-        Instant.ofEpochMilli(p.epochMs).atZone(ZoneId.of(p.zoneId)).toLocalTime().format(TIME)
+        Instant.ofEpochMilli(p.epochMs).atZone(DayCounting.zoneOf(p.zoneId)).toLocalTime().format(TIME)
 
     private fun attributionText(attr: DayAttribution): String = when {
         attr.shares.isEmpty() -> "无记录"
@@ -26,6 +26,10 @@ object Exporter {
             it.cityName + if (it.weight >= 1.0) " +1" else " +0.5"
         } + if (attr.manual) "（手动）" else ""
     }
+
+    /** 进行中的今天只有一个半天样本时先计 0.5,导出里要说清楚,别和跨城的 0.5 混为一谈 */
+    private fun inProgressNote(attr: DayAttribution): String? =
+        if (!attr.manual && attr.shares.size == 1 && attr.shares[0].weight == 0.5) "今天进行中，先计半天" else null
 
     data class DailyRow(
         val date: LocalDate,
@@ -42,7 +46,12 @@ object Exporter {
             val cur = bySlot[k]
             if (cur == null || p.epochMs < cur.epochMs) bySlot[k] = p
         }
-        return stats.days.map { (date, attr) ->
+        // 「开始使用」之前的日子不是漏记,不该在明细里写成一堆"无记录"
+        // (此前与汇总里的「无记录天数」自相矛盾)
+        val since = stats.trackingSince
+        return stats.days
+            .filterKeys { since == null || !it.isBefore(since) }
+            .map { (date, attr) ->
             DailyRow(
                 date,
                 bySlot[date to Slot.MORNING],
@@ -59,7 +68,10 @@ object Exporter {
         for (c in stats.cities) {
             rows.add(listOf(c.cityName, DayCounting.formatDays(c.days), c.fullDays.toString(), c.halfDays.toString()))
         }
-        rows.add(listOf("（无记录天数）", stats.unrecordedDates.size.toString(), "", ""))
+        // 无记录天数不再塞进城市表的「天数」列(对该列求和会被污染),单独一段并给出合计
+        rows.add(listOf("", "", "", ""))
+        rows.add(listOf("合计（天）", DayCounting.formatDays(stats.recordedDays), "", ""))
+        rows.add(listOf("无记录天数", "", "", stats.unrecordedDates.size.toString()))
         return rows
     }
 
@@ -69,6 +81,7 @@ object Exporter {
         for (r in dailyRows(stats, punches)) {
             val notes = ArrayList<String>()
             if (r.attribution.manual) notes.add("手动更正/补记")
+            inProgressNote(r.attribution)?.let { notes.add(it) }
             if (r.morning?.delayed == true) notes.add("早点延迟")
             if (r.evening?.delayed == true) notes.add("晚点延迟")
             if (r.morning?.fromCache == true || r.evening?.fromCache == true || r.extra?.fromCache == true) {

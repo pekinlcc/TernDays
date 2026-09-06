@@ -217,4 +217,55 @@ class DayCountingTest {
         // 9/4 漏了;今天(9/5)还有机会自动打上,不催补记
         assertEquals(listOf(LocalDate.parse("2026-09-04")), stats.unrecordedDates)
     }
+
+    @Test
+    fun `跨年后一月初的漏记也算无记录`() {
+        // 去年就在用,今年 1 月 4 日才第一次打上卡:1/1–1/3 是真的漏了
+        val p = punch("2026-01-04", Slot.MORNING, "杭州")
+        val stats = DayCounting.computeYearStats(
+            2026, LocalDate.parse("2026-01-05"), listOf(p), emptyList(),
+            earliestRecordDate = LocalDate.parse("2025-06-01"),
+        )
+        assertEquals(
+            listOf("2026-01-01", "2026-01-02", "2026-01-03", "2026-01-05").map(LocalDate::parse),
+            stats.unrecordedDates,
+        )
+        assertEquals(LocalDate.parse("2025-06-01"), stats.trackingSince)
+
+        // 不传全库最早记录时(旧口径)1 月初会被当成"还没开始用"
+        val old = DayCounting.computeYearStats(2026, LocalDate.parse("2026-01-05"), listOf(p), emptyList())
+        assertEquals(listOf(LocalDate.parse("2026-01-05")), old.unrecordedDates)
+    }
+
+    @Test
+    fun `半天样本标记含首点兜底`() {
+        val m = punch("2026-05-05", Slot.MORNING, "北京")
+        val e = punch("2026-05-05", Slot.EVENING, "上海")
+        assertEquals(true to true, DayCounting.halfSampleFlags(m, e, null))
+        assertEquals(true to false, DayCounting.halfSampleFlags(m, null, null))
+        assertEquals(false to true, DayCounting.halfSampleFlags(null, e, null))
+        assertEquals(false to false, DayCounting.halfSampleFlags(null, null, null))
+        // 首点按捕获时刻归到对应半天(16 点 → 下半天)
+        val extraPm = Punch(
+            localDate = LocalDate.parse("2026-05-05"), slot = Slot.EXTRA,
+            epochMs = java.time.LocalDateTime.parse("2026-05-05T16:00")
+                .atZone(java.time.ZoneId.of("Asia/Shanghai")).toInstant().toEpochMilli(),
+            zoneId = "Asia/Shanghai", lat = 0.0, lng = 0.0, accuracyM = null,
+            cityKey = "CN:成都", cityName = "成都",
+        )
+        assertEquals(false to true, DayCounting.halfSampleFlags(null, null, extraPm))
+    }
+
+    @Test
+    fun `坏时区 id 不会把统计带崩`() {
+        // 时区 id 可能来自另一台手机或已下线的旧 id:此前 ZoneId.of 直接抛异常
+        val bad = Punch(
+            localDate = LocalDate.parse("2026-04-01"), slot = Slot.EXTRA, epochMs = 1_777_000_000_000,
+            zoneId = "Mars/Olympus", lat = 0.0, lng = 0.0, accuracyM = null,
+            cityKey = "CN:上海", cityName = "上海",
+        )
+        val stats = DayCounting.computeYearStats(2026, LocalDate.parse("2026-04-02"), listOf(bad), emptyList())
+        assertEquals(1.0, stats.recordedDays)
+        assertEquals("上海", stats.cities.single().cityName)
+    }
 }

@@ -146,7 +146,12 @@ fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
             date = target,
             currentCityName = current?.shares?.joinToString(" + ") { it.cityName },
             recentCities = d?.stats?.cities?.map { it.cityKey to it.cityName } ?: emptyList(),
-            hasBothHalves = dayPunches.any { it.slot == Slot.MORNING } && dayPunches.any { it.slot == Slot.EVENING },
+            hasBothHalves = DayCounting.halfSampleFlags(
+                dayPunches.firstOrNull { it.slot == Slot.MORNING },
+                dayPunches.firstOrNull { it.slot == Slot.EVENING },
+                dayPunches.firstOrNull { it.slot == Slot.EXTRA },
+            ).let { it.first || it.second },
+            existing = d?.overrides?.filter { it.localDate == target } ?: emptyList(),
             onDismiss = { correcting = null },
             onPick = { key, name, scope ->
                 PunchDb.get(context).setOverride(DayOverride(target, key, name, scope))

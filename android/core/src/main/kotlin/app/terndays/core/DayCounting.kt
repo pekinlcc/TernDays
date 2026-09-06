@@ -16,12 +16,30 @@ import java.time.LocalDate
 object DayCounting {
 
     private fun localTime(p: Punch) =
-        java.time.Instant.ofEpochMilli(p.epochMs).atZone(java.time.ZoneId.of(p.zoneId)).toLocalTime()
+        java.time.Instant.ofEpochMilli(p.epochMs).atZone(zoneOf(p.zoneId)).toLocalTime()
+
+    /**
+     * 时区 id 来自落库时的系统值，也可能来自另一台手机导入的数据；
+     * 系统升级后个别 id 会失效，`ZoneId.of` 直接抛异常会把首页/导出整个带崩。
+     */
+    internal fun zoneOf(id: String): java.time.ZoneId =
+        runCatching { java.time.ZoneId.of(id) }.getOrElse { java.time.ZoneId.systemDefault() }
 
     /** 半天样本:来自打卡、首点兜底,或半天手动更正。 */
     private data class Sample(val cityKey: String, val cityName: String)
 
     private fun Punch.sample() = Sample(cityKey, cityName)
+
+    /**
+     * 这一天上/下半天各自有没有样本（含首点兜底）。
+     * 用于界面判断能否做半天更正：只有一个样本时也允许改那半天，
+     * 否则「整天更正」会把另半天（可能还没打或属于另一座城市）一起吞掉。
+     */
+    fun halfSampleFlags(morning: Punch?, evening: Punch?, extra: Punch?): Pair<Boolean, Boolean> {
+        val m = morning ?: extra?.takeIf { PunchRules.isMorningHalf(localTime(it)) }
+        val e = evening ?: extra?.takeIf { !PunchRules.isMorningHalf(localTime(it)) }
+        return (m != null) to (e != null)
+    }
 
     fun attributeDay(
         date: LocalDate,
@@ -98,6 +116,8 @@ object DayCounting {
      *
      * @param nowHour 当前本地小时（0–23）。给了就把 today 当作「进行中」：
      *   还没打的那半天不算漏记，单样本先按 0.5 天计。传 null 表示按已结束的日子统计（历史/导出）。
+     * @param earliestRecordDate 全库最早一条记录的日期（跨年份）。跨年后 1 月初的漏记
+     *   必须靠它才能被认出来——只看当年最早记录的话，1 月初永远排在它之前、永远不算「无记录」。
      */
     fun computeYearStats(
         year: Int,
@@ -105,6 +125,7 @@ object DayCounting {
         punches: List<Punch>,
         overrides: List<DayOverride>,
         nowHour: Int? = null,
+        earliestRecordDate: LocalDate? = null,
     ): YearStats {
         val first = LocalDate.of(year, 1, 1)
         val yearEnd = LocalDate.of(year, 12, 31)
@@ -125,6 +146,7 @@ object DayCounting {
         // 「无记录」从当年首条记录之日起算:安装/开始使用之前的日子不是「漏记」,
         // 不再让新装用户首页一上来就显示「另有 240+ 天无记录」
         val firstRecordDate = minOf(
+            earliestRecordDate ?: LocalDate.MAX,
             bySlot.keys.minOfOrNull { it.first } ?: LocalDate.MAX,
             overridesByDate.keys.minOrNull() ?: LocalDate.MAX,
         )
@@ -166,7 +188,10 @@ object DayCounting {
             .map { CityStat(it.key, it.value.name, it.value.days, it.value.full, it.value.half) }
             .sortedWith(compareByDescending<CityStat> { it.days }.thenBy { it.cityName })
 
-        return YearStats(year, first, last, recorded, cities, unrecorded, days)
+        return YearStats(
+            year, first, last, recorded, cities, unrecorded, days,
+            trackingSince = firstRecordDate.takeIf { it != LocalDate.MAX },
+        )
     }
 
     /** 38.5 -> "38.5"，152.0 -> "152" */

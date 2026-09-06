@@ -57,6 +57,7 @@ import app.terndays.android.util.Perms
 import app.terndays.android.util.VendorKeepAlive
 import app.terndays.core.DayOverride
 import app.terndays.core.MigrationLink
+import app.terndays.core.OverrideScope
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.Dispatchers
@@ -72,9 +73,10 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
         onPauseOrDispose { }
     }
 
-    val year = LocalDate.now().year
+    // 年份可切换:此前写死当前年,往年的无记录日在应用里根本补不了
+    var year by remember { mutableIntStateOf(LocalDate.now().year) }
     val dataVersion = DataBus.version.intValue
-    val data by produceState<YearData?>(initialValue = null, tick, dataVersion) {
+    val data by produceState<YearData?>(initialValue = null, tick, dataVersion, year) {
         value = loadYearData(context, year)
     }
 
@@ -210,11 +212,32 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                 Text("补记无记录的日子", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.Ink)
                                 Text(
-                                    "今年还有 ${data?.stats?.unrecordedDates?.size ?: 0} 天没有任何记录",
+                                    "$year 年还有 ${data?.stats?.unrecordedDates?.size ?: 0} 天没有任何记录",
                                     fontSize = 12.sp, color = Td.Muted,
                                 )
                             }
                             Icon(painterResource(R.drawable.ic_chev_right), null, Modifier.size(16.dp), tint = Td.Chevron)
+                        }
+                        // 往年也能补记:切到那一年即可
+                        val years = data?.years ?: listOf(year)
+                        if (years.size > 1) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                years.forEach { y ->
+                                    Text(
+                                        "$y 年",
+                                        fontSize = 12.sp,
+                                        fontWeight = if (y == year) FontWeight.SemiBold else FontWeight.Normal,
+                                        color = if (y == year) Td.OnAccent else Td.Muted,
+                                        modifier = Modifier.clip(RoundedCornerShape(999.dp))
+                                            .background(if (y == year) Td.Accent else Td.Bg)
+                                            .clickable { year = y }
+                                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                                    )
+                                }
+                            }
                         }
                         HorizontalDivider(color = Td.Divider, thickness = 1.dp)
                         Text(
@@ -225,25 +248,35 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
                         val overrides = data?.overrides ?: emptyList()
                         if (overrides.isNotEmpty()) {
                             HorizontalDivider(color = Td.Divider, thickness = 1.dp)
-                            overrides.sortedByDescending { it.localDate }.forEach { o ->
-                                Row(
-                                    Modifier.fillMaxWidth().padding(vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        "${o.localDate.monthValue}月${o.localDate.dayOfMonth}日 → ${o.cityName}（手动）",
-                                        fontSize = 13.sp, color = Td.Ink, modifier = Modifier.weight(1f),
-                                    )
-                                    Text(
-                                        "恢复自动", fontSize = 12.sp, color = Td.WarmDeep,
-                                        modifier = Modifier.clickable {
-                                            PunchDb.get(context).removeOverride(o.localDate)
-                                            app.terndays.android.widget.TernDaysWidgetProvider.updateAll(context)
-                                            tick++
-                                        },
-                                    )
+                            // 同一天可能有上/下两条半天更正:必须分别显示、分别恢复,
+                            // 此前两行长得一样且点任一行都会把整天的更正一起删掉
+                            overrides
+                                .sortedWith(compareByDescending<DayOverride> { it.localDate }.thenBy { it.scope.name })
+                                .forEach { o ->
+                                    val scopeLabel = when (o.scope) {
+                                        OverrideScope.FULL -> "整天"
+                                        OverrideScope.MORNING -> "上半天"
+                                        else -> "下半天"
+                                    }
+                                    Row(
+                                        Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            "${o.localDate.monthValue}月${o.localDate.dayOfMonth}日 · $scopeLabel → ${o.cityName}",
+                                            fontSize = 13.sp, color = Td.Ink, modifier = Modifier.weight(1f),
+                                        )
+                                        Text(
+                                            "恢复自动", fontSize = 12.sp, color = Td.WarmDeep,
+                                            modifier = Modifier.clickable {
+                                                PunchDb.get(context).removeOverride(o.localDate, o.scope)
+                                                app.terndays.android.widget.TernDaysWidgetProvider.updateAll(context)
+                                                DataBus.bump()
+                                                tick++
+                                            }.padding(6.dp),
+                                        )
+                                    }
                                 }
-                            }
                         }
                     }
                 }

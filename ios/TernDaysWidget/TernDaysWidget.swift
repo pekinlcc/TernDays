@@ -70,7 +70,8 @@ struct TernProvider: TimelineProvider {
             today: today,
             punches: DataStore.shared.punchesForYear(today.year),
             overrides: DataStore.shared.overridesForYear(today.year),
-            nowHour: Calendar.current.component(.hour, from: Date())
+            nowHour: Calendar.current.component(.hour, from: Date()),
+            earliestRecordDate: DataStore.shared.earliestRecordDate()
         )
         return TernEntry(
             date: Date(),

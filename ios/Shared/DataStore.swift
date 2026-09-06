@@ -140,6 +140,20 @@ final class DataStore {
         queue.sync { punches.contains { $0.localDate == date && $0.slot == slot } }
     }
 
+    /// 全库最早一条记录（打卡或手动更正）的日期：跨年后 1 月初的漏记要靠它才认得出来。
+    func earliestRecordDate() -> LocalDate? {
+        queue.sync {
+            let a = punches.map(\.localDate).min()
+            let b = overrides.map(\.localDate).min()
+            switch (a, b) {
+            case let (x?, y?): return min(x, y)
+            case let (x?, nil): return x
+            case let (nil, y?): return y
+            default: return nil
+            }
+        }
+    }
+
     /// 是否已有任何打卡记录（用于判定「首次安装的首点」）
     func hasAnyPunch() -> Bool {
         queue.sync { !punches.isEmpty }
@@ -205,6 +219,14 @@ final class DataStore {
     func removeOverride(date: LocalDate) {
         queue.sync {
             overrides.removeAll { $0.localDate == date }
+            persist()
+        }
+    }
+
+    /// 只恢复某一天某个范围的自动判定（同一天的另半天更正保持不变）。
+    func removeOverride(date: LocalDate, scope: OverrideScope) {
+        queue.sync {
+            overrides.removeAll { $0.localDate == date && $0.scope == scope }
             persist()
         }
     }

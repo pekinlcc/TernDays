@@ -12,6 +12,13 @@ enum DayCounting {
         let cityName: String
     }
 
+    /// 这一天上/下半天各自有没有样本（含首点兜底）。界面据此决定能否做半天更正。
+    static func halfSampleFlags(morning: Punch?, evening: Punch?, extra: Punch?) -> (Bool, Bool) {
+        let m = morning ?? extra.flatMap { $0.localHour < 12 ? $0 : nil }
+        let e = evening ?? extra.flatMap { $0.localHour >= 12 ? $0 : nil }
+        return (m != nil, e != nil)
+    }
+
     static func attributeDay(
         date: LocalDate,
         morning: Punch?,
@@ -75,12 +82,15 @@ enum DayCounting {
 
     /// - Parameter nowHour: 当前本地小时（0–23）。给了就把 today 当作「进行中」：
     ///   还没打的那半天不算漏记，单样本先按 0.5 天计。传 nil 表示按已结束的日子统计。
+    /// - Parameter earliestRecordDate: 全库最早一条记录的日期（跨年份）。跨年后 1 月初的漏记
+    ///   必须靠它才认得出来。
     static func computeYearStats(
         year: Int,
         today: LocalDate,
         punches: [Punch],
         overrides: [DayOverride],
-        nowHour: Int? = nil
+        nowHour: Int? = nil,
+        earliestRecordDate: LocalDate? = nil
     ) -> YearStats {
         let first = LocalDate(year: year, month: 1, day: 1)
         let yearEnd = LocalDate(year: year, month: 12, day: 31)
@@ -100,9 +110,10 @@ enum DayCounting {
         let overridesByDate = Dictionary(grouping: overrides.filter { $0.localDate.year == year }) { $0.localDate }
 
         // 「无记录」从当年首条记录之日起算:开始使用之前的日子不是漏记
+        let sentinel = LocalDate(year: 9999, month: 12, day: 31)
         let firstRecordDate = min(
-            bySlot.values.map(\.localDate).min() ?? LocalDate(year: 9999, month: 12, day: 31),
-            overridesByDate.keys.min() ?? LocalDate(year: 9999, month: 12, day: 31)
+            earliestRecordDate ?? sentinel,
+            min(bySlot.values.map(\.localDate).min() ?? sentinel, overridesByDate.keys.min() ?? sentinel)
         )
 
         var days: [LocalDate: DayAttribution] = [:]
@@ -145,7 +156,8 @@ enum DayCounting {
             .sorted { ($0.days, $1.cityName) > ($1.days, $0.cityName) }
 
         return YearStats(year: year, firstDate: first, lastDate: last, recordedDays: recorded,
-                         cities: cities, unrecordedDates: unrecorded.sorted(), days: days)
+                         cities: cities, unrecordedDates: unrecorded.sorted(), days: days,
+                         trackingSince: firstRecordDate == sentinel ? nil : firstRecordDate)
     }
 
     /// 38.5 -> "38.5"，152.0 -> "152"

@@ -78,7 +78,17 @@ struct HomeView: View {
                 currentCityName: data?.stats.days[today]?.shares.map(\.cityName).joined(separator: " + "),
                 recentCities: data?.stats.cities.map { ($0.cityKey, $0.cityName) } ?? [],
                 hasOverride: data?.overrides.contains { $0.localDate == today } ?? false,
-                hasBothHalves: todayPunches.contains { $0.slot == .morning } && todayPunches.contains { $0.slot == .evening },
+                // 只要有半天样本就允许半天更正:进行中的今天只打了早点时,
+                // 整天更正会把还没到的晚点那半天一起吞掉
+                hasBothHalves: {
+                    let f = DayCounting.halfSampleFlags(
+                        morning: todayPunches.first { $0.slot == .morning },
+                        evening: todayPunches.first { $0.slot == .evening },
+                        extra: todayPunches.first { $0.slot == .extra }
+                    )
+                    return f.0 || f.1
+                }(),
+                existing: data?.overrides.filter { $0.localDate == today } ?? [],
                 onPick: { key, name, scope in
                     DataStore.shared.setOverride(DayOverride(localDate: today, cityKey: key, cityName: name, scope: scope))
                     WidgetCenter.shared.reloadAllTimelines()

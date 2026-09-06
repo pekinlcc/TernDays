@@ -116,6 +116,15 @@ class PunchDb private constructor(context: Context) :
         return writableDatabase.insertWithOnConflict("punch", null, values, SQLiteDatabase.CONFLICT_IGNORE) != -1L
     }
 
+    /** 全库最早一条记录(打卡或手动更正)的日期:跨年后 1 月初的漏记要靠它才认得出来。 */
+    fun earliestRecordDate(): LocalDate? =
+        readableDatabase.rawQuery(
+            "SELECT MIN(d) FROM (SELECT MIN(local_date) AS d FROM punch UNION ALL SELECT MIN(local_date) FROM day_override)",
+            null,
+        ).use { c ->
+            if (c.moveToNext() && !c.isNull(0)) runCatching { LocalDate.parse(c.getString(0)) }.getOrNull() else null
+        }
+
     fun hasAnyPunch(): Boolean =
         readableDatabase.rawQuery("SELECT 1 FROM punch LIMIT 1", null).use { it.moveToFirst() }
 

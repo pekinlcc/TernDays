@@ -59,7 +59,7 @@ import java.time.ZoneId
 private val WEEK_CN = arrayOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 internal fun weekCn(d: LocalDate) = WEEK_CN[d.dayOfWeek.value - 1]
 internal fun punchClock(p: Punch): String {
-    val t = Instant.ofEpochMilli(p.epochMs).atZone(ZoneId.of(p.zoneId)).toLocalTime()
+    val t = Instant.ofEpochMilli(p.epochMs).atZone(DayCounting.zoneOf(p.zoneId)).toLocalTime()
     return "%02d:%02d".format(t.hour, t.minute)
 }
 
@@ -138,11 +138,19 @@ fun HomeScreen(
         val today = LocalDate.now()
         val current = data?.stats?.days?.get(today)
         val todayPunches = data?.punches?.filter { it.localDate == today } ?: emptyList()
+        // 只要有半天样本就允许半天更正:进行中的今天只打了早点时,整天更正会把还没到的
+        // 晚点那半天一起吞掉(此前只有早晚都打上了才给选)
+        val (hasM, hasE) = DayCounting.halfSampleFlags(
+            todayPunches.firstOrNull { it.slot == Slot.MORNING },
+            todayPunches.firstOrNull { it.slot == Slot.EVENING },
+            todayPunches.firstOrNull { it.slot == Slot.EXTRA },
+        )
         CityCorrectDialog(
             date = today,
             currentCityName = current?.shares?.joinToString(" + ") { it.cityName },
             recentCities = data?.stats?.cities?.map { it.cityKey to it.cityName } ?: emptyList(),
-            hasBothHalves = todayPunches.any { it.slot == Slot.MORNING } && todayPunches.any { it.slot == Slot.EVENING },
+            hasBothHalves = hasM || hasE,
+            existing = data?.overrides?.filter { it.localDate == today } ?: emptyList(),
             onDismiss = { correctingToday = false },
             onPick = { key, name, scope ->
                 PunchDb.get(context).setOverride(DayOverride(today, key, name, scope))

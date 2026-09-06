@@ -75,7 +75,15 @@ struct CityDetailView: View {
                 currentCityName: data?.stats.days[target.date]?.shares.map(\.cityName).joined(separator: " + "),
                 recentCities: data?.stats.cities.map { ($0.cityKey, $0.cityName) } ?? [],
                 hasOverride: data?.overrides.contains { $0.localDate == target.date } ?? false,
-                hasBothHalves: dayPunches.contains { $0.slot == .morning } && dayPunches.contains { $0.slot == .evening },
+                hasBothHalves: {
+                    let f = DayCounting.halfSampleFlags(
+                        morning: dayPunches.first { $0.slot == .morning },
+                        evening: dayPunches.first { $0.slot == .evening },
+                        extra: dayPunches.first { $0.slot == .extra }
+                    )
+                    return f.0 || f.1
+                }(),
+                existing: data?.overrides.filter { $0.localDate == target.date } ?? [],
                 onPick: { key, name, scope in
                     DataStore.shared.setOverride(DayOverride(localDate: target.date, cityKey: key, cityName: name, scope: scope))
                     afterCorrection()

@@ -64,4 +64,6 @@ data class YearStats(
     val cities: List<CityStat>,
     val unrecordedDates: List<LocalDate>,
     val days: Map<LocalDate, DayAttribution>,
+    /** 「开始使用」之日：早于它的日子既不算漏记，也不该出现在导出的每日明细里 */
+    val trackingSince: LocalDate? = null,
 )
