@@ -40,6 +40,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // 落盘失败要让用户看见:否则界面提示「已保存」,重启后改动却消失了
         DataStore.shared.onWriteFailure = { ToastCenter.shared.show($0) }
         UNUserNotificationCenter.current().delegate = self
+        Self.reconcileOnboarding()
         PunchManager.shared.registerBackgroundTask()
         if UserDefaults.standard.bool(forKey: "onboardingDone") {
             PunchManager.shared.activate()
@@ -61,6 +62,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             })
         }
         return true
+    }
+
+    /// iCloud 恢复会带回 onboardingDone,但数据目录不进备份:没有标记就重新引导(权限也不会随备份恢复)。
+    /// 老版本升级上来的用户本机有数据文件,补一个标记即可。
+    private static func reconcileOnboarding() {
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: "onboardingDone"), !DataStore.shared.hasOnboardingMarker else { return }
+        if DataStore.shared.hasStoredDataFiles {
+            DataStore.shared.markOnboarded()
+        } else {
+            defaults.set(false, forKey: "onboardingDone")
+        }
     }
 
     // 应用在前台时系统默认不展示通知:打卡失败/权限提醒照样要让人看见

@@ -3,6 +3,20 @@
 版本号规则：起始 0.1；小功能改进 → 0.2、0.3…；bug 修复 → 0.1.1、0.1.2…；
 重大功能 / 架构或设计重构 → 1.0.0、2.0.0…。每个版本对应一个 `vX.Y[.Z]` tag 与 GitHub Release。
 
+## v0.11.3 · 2026-09-23
+
+第二次全面复查的第三批(隐私备份口径 + 迁移健壮性):
+
+- Android `dataExtractionRules` / `fullBackupContent`:云备份排除 database 与 sharedpref(本地换机保留);
+  iOS 数据目录 `isExcludedFromBackup`,引导完成标记随数据目录走,iCloud 恢复后缺数据则重新引导
+- 引导页与 Info.plist 删掉失实的「只保留城市级别」,如实说明坐标只存本机
+- `isLanAddress` 双端严格解析 IPv4/IPv6 数字字面量(拒绝 "fd:x.attacker.example")
+- iOS 本地网络授权(.waiting PolicyDenied)暂停计时并给出原因;NWListener stop 强持有 self;
+  发送端 hello 5 秒超时;扫码页 CameraState
+- Android `MigrateImportSession` 进程级导入状态 + 导入时亮屏;MigrateServer 每连接独立线程、
+  hello 5 秒超时、陌生连接静默丢弃
+- :core 测试 80 → 82
+
 ## v0.11.2 · 2026-09-23
 
 第二次全面复查的第二批(iOS 打卡与数据安全):

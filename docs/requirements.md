@@ -118,6 +118,14 @@
 
 - 所有数据仅存手机本地（Android: SQLite；iOS: 本地文件），无账号、无服务器、零联网。
 - 删除应用即清除全部数据。
+- **坐标保留**：每次打卡的原始经纬度与定位误差保存在本机（Q5），用于城市库升级后按时间重放重新判定；
+  界面、小组件与导出只呈现城市与天数。
+- **备份口径（v0.11.3）**：打卡库与偏好不进任何系统云备份——Android 12+ 用 `dataExtractionRules`
+  在 `<cloud-backup>` 里同时排除 database 与 sharedpref 两个域（只排一个会出现「引导已完成但库为空」的错配），
+  Android 11 及以下用 `fullBackupContent` 一律排除；iOS 给数据目录设 `isExcludedFromBackup`，
+  并在目录里放引导完成标记，iCloud 恢复带回了 onboardingDone 而数据目录不在时重新引导。
+- **设备间传输**：Android 本地换机（device-transfer，不经服务器）默认可带走；
+  其余一律走 6.1 的扫码迁移。
 
 ### 6.1 换手机数据迁移（v0.6，已确认方案：扫码配对 + 局域网直传）
 

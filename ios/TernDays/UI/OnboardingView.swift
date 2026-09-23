@@ -55,7 +55,7 @@ struct OnboardingView: View {
                     .multilineTextAlignment(.center)
                     .padding(.top, 28)
 
-                Text("每天早上 7:00 和下午 5:00 前后，TernDays 记录一次 GPS 定位，只保留“城市”级别的结果，用来统计你一年里在每座城市待了多少天。")
+                Text("每天早上 7:00 和下午 5:00 前后，TernDays 记录一次 GPS 定位，统计你一年里在每座城市待了多少天。定位坐标只存在本机（城市库升级后用来重新判定），界面只显示城市。")
                     .font(.system(size: 14)).foregroundColor(Td.muted)
                     .multilineTextAlignment(.center)
                     .lineSpacing(6)

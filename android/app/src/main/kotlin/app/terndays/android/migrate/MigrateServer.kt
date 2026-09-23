@@ -11,6 +11,7 @@ import java.io.DataOutputStream
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.ServerSocket
+import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -26,6 +27,7 @@ class MigrateServer(
     private val onError: (String) -> Unit,
 ) {
     private val stopped = AtomicBoolean(false)
+    private val finished = AtomicBoolean(false)
     @Volatile private var serverSocket: ServerSocket? = null
     private var thread: Thread? = null
 
@@ -51,43 +53,14 @@ class MigrateServer(
                 val server = ServerSocket(0).also { serverSocket = it }
                 onReady(MigrationLink.build(addresses, server.localPort, key))
 
-                while (!stopped.get()) {
+                while (!stopped.get() && !finished.get()) {
                     val socket = try {
                         server.accept()
                     } catch (_: Exception) {
                         break // stop() 关闭了 socket
                     }
-                    try {
-                        socket.soTimeout = 20_000
-                        val input = DataInputStream(socket.getInputStream())
-                        val hello = ByteArray(MigrationLink.MAGIC_HELLO.size + fingerprint.size)
-                        input.readFully(hello)
-                        val magicOk = hello.copyOfRange(0, MigrationLink.MAGIC_HELLO.size)
-                            .contentEquals(MigrationLink.MAGIC_HELLO)
-                        val fpOk = hello.copyOfRange(MigrationLink.MAGIC_HELLO.size, hello.size)
-                            .contentEquals(fingerprint)
-                        if (!magicOk || !fpOk) {
-                            socket.close()
-                            continue // 陌生连接:丢弃,继续等真正的新手机
-                        }
-                        onStatus("新手机已连接,正在传输…")
-                        val out = DataOutputStream(socket.getOutputStream())
-                        out.writeInt(blob.size)
-                        out.write(blob)
-                        out.flush()
-                        val done = ByteArray(MigrationLink.MAGIC_DONE.size)
-                        input.readFully(done)
-                        if (done.contentEquals(MigrationLink.MAGIC_DONE)) {
-                            val count = input.readInt()
-                            socket.close()
-                            onDone(count)
-                            return@Thread
-                        }
-                        socket.close()
-                    } catch (_: Exception) {
-                        runCatching { socket.close() }
-                        if (!stopped.get()) onStatus("连接中断,可让新手机重新扫码")
-                    }
+                    // 每个连接独立线程:一个连上却不说话的陌生连接不能把真正的新手机挡在门外
+                    Thread { serve(socket, blob, fingerprint) }.apply { isDaemon = true }.start()
                 }
             } catch (e: Exception) {
                 if (!stopped.get()) onError("启动迁移服务失败:${e.message ?: e.javaClass.simpleName}")
@@ -97,12 +70,53 @@ class MigrateServer(
         }.also { it.isDaemon = true; it.start() }
     }
 
+    /** 单个连接。暗号/指纹不对、5 秒内不说话:静默丢弃,不改页面状态(那不是用户的新手机)。 */
+    private fun serve(socket: Socket, blob: ByteArray, fingerprint: ByteArray) {
+        var verified = false
+        try {
+            socket.soTimeout = HELLO_TIMEOUT_MS
+            val input = DataInputStream(socket.getInputStream())
+            val hello = ByteArray(MigrationLink.MAGIC_HELLO.size + fingerprint.size)
+            input.readFully(hello)
+            val magicOk = hello.copyOfRange(0, MigrationLink.MAGIC_HELLO.size)
+                .contentEquals(MigrationLink.MAGIC_HELLO)
+            val fpOk = hello.copyOfRange(MigrationLink.MAGIC_HELLO.size, hello.size)
+                .contentEquals(fingerprint)
+            if (!magicOk || !fpOk || stopped.get() || finished.get()) return
+            verified = true
+            socket.soTimeout = TRANSFER_TIMEOUT_MS
+            onStatus("新手机已连接,正在传输…")
+            val out = DataOutputStream(socket.getOutputStream())
+            out.writeInt(blob.size)
+            out.write(blob)
+            out.flush()
+            val done = ByteArray(MigrationLink.MAGIC_DONE.size)
+            input.readFully(done)
+            if (done.contentEquals(MigrationLink.MAGIC_DONE)) {
+                val count = input.readInt()
+                if (finished.compareAndSet(false, true)) {
+                    runCatching { serverSocket?.close() } // 成功一次即停止
+                    onDone(count)
+                }
+            } else {
+                onStatus("连接中断,可让新手机重新扫码")
+            }
+        } catch (_: Exception) {
+            if (verified && !stopped.get() && !finished.get()) onStatus("连接中断,可让新手机重新扫码")
+        } finally {
+            runCatching { socket.close() }
+        }
+    }
+
     fun stop() {
         stopped.set(true)
         runCatching { serverSocket?.close() }
     }
 
     companion object {
+        private const val HELLO_TIMEOUT_MS = 5_000
+        private const val TRANSFER_TIMEOUT_MS = 30_000
+
         /** 本机可被局域网访问的 IPv4 地址,Wi-Fi/热点接口优先。 */
         fun siteLocalAddresses(): List<String> = try {
             NetworkInterface.getNetworkInterfaces().toList()

@@ -47,6 +47,38 @@ class MigrationTest {
     }
 
     @Test
+    fun `v2 半天更正 round-trip 与 iOS 风格输入`() {
+        val d1 = LocalDate.of(2026, 9, 1)
+        val d2 = LocalDate.of(2026, 9, 2)
+        val ovs = listOf(
+            DayOverride(d1, "CN:深圳", "深圳"),
+            DayOverride(d2, "CN:深圳", "深圳", OverrideScope.MORNING),
+            DayOverride(d2, "HK:香港", "香港", OverrideScope.EVENING),
+        )
+        val sticky = punch.copy(localDate = d2, viaContext = true)
+        val json = MigrationCodec.toJson(3, 9L, listOf(punch, sticky), ovs)
+        assertTrue(json.contains("\"format\":2"))
+        // 全天更正不带 scope 键(老版本仍可解析),半天更正带
+        assertEquals(2, Regex("\"scope\"").findAll(json).count())
+        val p = MigrationCodec.parse(json)
+        assertEquals(2, p.formatVersion)
+        assertEquals(ovs, p.overrides)
+        assertEquals(listOf(punch, sticky), p.punches)
+        assertTrue(p.punches[1].viaContext)
+
+        // iOS 的 Codable 输出:format 1、FULL 显式带 "scope":"FULL"、没有 viaContext 键
+        val ios = """{"app":"TernDays","format":1,"datasetVersion":3,"exportedAtMs":1,
+            "punches":[{"localDate":"2026-09-01","slot":"MORNING","epochMs":1756700000000,
+              "zoneId":"Asia/Shanghai","lat":22.5,"lng":114.0,"cityKey":"CN:深圳","cityName":"深圳",
+              "delayed":false,"fromCache":false}],
+            "overrides":[{"localDate":"2026-09-01","cityKey":"CN:深圳","cityName":"深圳","scope":"FULL"}]}"""
+        val q = MigrationCodec.parse(ios)
+        assertEquals(OverrideScope.FULL, q.overrides.single().scope)
+        assertFalse(q.punches.single().viaContext)
+        assertNull(q.punches.single().accuracyM)
+    }
+
+    @Test
     fun `空数据与坏输入`() {
         val empty = MigrationCodec.parse(MigrationCodec.toJson(2, 0L, emptyList(), emptyList()))
         assertTrue(empty.punches.isEmpty() && empty.overrides.isEmpty())
@@ -114,6 +146,25 @@ class MigrationTest {
             assertFalse(MigrationLink.isLanAddress(a), a)
         }
         assertNull(MigrationLink.parse(MigrationLink.build(listOf("8.8.8.8"), 4321, key)))
+    }
+
+    @Test
+    fun `带冒号的主机名不能冒充 IPv6 私网地址`() {
+        for (a in listOf(
+            "fd:x.attacker.example", "fe80:evil.com", "fcxyz::1", "fd00::1::2", "fd00:12345::1",
+            "1.2.3.4::", "+10.0.0.1", "10.0.0.1%eth0", "0x0a.0.0.1", "fe80::1%evil/../x", "::", "2001:db8::1",
+        )) {
+            assertFalse(MigrationLink.isLanAddress(a), a)
+        }
+        for (a in listOf(
+            "fd12:3456::1", "FD12:3456::1", "fe80::1%wlan0", "febf::1", "fc00::", "::1", "0:0:0:0:0:0:0:1",
+            "fd00::192.168.1.1", "192.168.43.1", "172.20.10.1",
+        )) {
+            assertTrue(MigrationLink.isLanAddress(a), a)
+        }
+        assertFalse(MigrationLink.isLanAddress("fec0::1")) // 已废弃的站点本地,不在 fe80::/10
+        val key = MigrationCrypto.newKey()
+        assertNull(MigrationLink.parse(MigrationLink.build(listOf("fd:x.attacker.example"), 4321, key)))
         // 混合时只保留局域网那条
         val mixed = MigrationLink.parse(MigrationLink.build(listOf("8.8.8.8", "192.168.0.5"), 4321, key))
         assertEquals(listOf("192.168.0.5"), mixed?.addresses)

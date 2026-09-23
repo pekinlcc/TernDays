@@ -98,23 +98,79 @@ enum MigrationLink {
         return schemePrefix + "v=1&a=" + addresses.joined(separator: ",") + "&p=\(port)&k=" + k
     }
 
-    /// 迁移只走局域网:二维码里的地址必须是私网/链路本地地址（与 :core MigrationLink.isLanAddress 对齐）。
+    /// 迁移只走局域网:二维码里的地址必须是私网/链路本地地址（与 :core MigrationLink.isLanAddress 逐条对齐）。
+    /// IPv6 必须能完整解析成数字字面量:"fd:x.attacker.example" 这种带冒号的主机名一律拒绝。
     static func isLanAddress(_ address: String) -> Bool {
-        let a = String(address.trimmingCharacters(in: .whitespaces).split(separator: "%").first ?? "")
+        let trimmed = address.trimmingCharacters(in: .whitespaces)
+        let pieces = trimmed.split(separator: "%", maxSplits: 1, omittingEmptySubsequences: false)
+        let a = String(pieces.first ?? "")
+        let zone = pieces.count > 1 ? String(pieces[1]) : nil
         if a.isEmpty { return false }
         if a.contains(":") {
-            let lower = a.lowercased()
-            return lower == "::1" || lower.hasPrefix("fe80:") || lower.hasPrefix("fd") || lower.hasPrefix("fc")
+            guard let h = parseIPv6(a) else { return false }
+            if let zone, !isZoneId(zone) { return false }
+            return (h.prefix(7).allSatisfy { $0 == 0 } && h[7] == 1) // ::1
+                || (h[0] & 0xFE00) == 0xFC00 // 唯一本地地址 fc00::/7
+                || (h[0] & 0xFFC0) == 0xFE80 // 链路本地 fe80::/10
         }
-        let parts = a.split(separator: ".").map { Int($0) }
-        guard parts.count == 4, !parts.contains(where: { $0 == nil }) else { return false }
-        let n = parts.map { $0! }
-        guard !n.contains(where: { $0 < 0 || $0 > 255 }) else { return false }
+        if zone != nil { return false }
+        guard let n = parseIPv4(a) else { return false }
         if n[0] == 10 || n[0] == 127 { return true }
         if n[0] == 192 && n[1] == 168 { return true }
         if n[0] == 172 && (16...31).contains(n[1]) { return true }
         if n[0] == 169 && n[1] == 254 { return true }
         return false
+    }
+
+    private static func isZoneId(_ z: String) -> Bool {
+        (1...32).contains(z.count) && z.unicodeScalars.allSatisfy {
+            CharacterSet.alphanumerics.contains($0) && $0.isASCII || "_.-".unicodeScalars.contains($0)
+        }
+    }
+
+    /// 严格的点分十进制:四段、每段 1–3 位纯数字、0...255。
+    private static func parseIPv4(_ s: String) -> [Int]? {
+        let parts = s.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return nil }
+        var out: [Int] = []
+        for p in parts {
+            guard (1...3).contains(p.count), p.allSatisfy({ ("0"..."9").contains($0) }),
+                  let v = Int(p), v <= 255 else { return nil }
+            out.append(v)
+        }
+        return out
+    }
+
+    /// RFC 4291 文本形式 → 8 个 16 位分组;支持 "::" 压缩与末尾内嵌 IPv4。
+    private static func parseIPv6(_ s: String) -> [Int]? {
+        let allowed = Set("0123456789abcdefABCDEF:.")
+        guard s.allSatisfy({ allowed.contains($0) }) else { return nil }
+        let halves = s.components(separatedBy: "::")
+        guard halves.count <= 2 else { return nil }
+        func groups(_ part: String, allowV4Tail: Bool) -> [Int]? {
+            if part.isEmpty { return [] }
+            let items = part.split(separator: ":", omittingEmptySubsequences: false)
+            var out: [Int] = []
+            for (i, g) in items.enumerated() {
+                if g.contains(".") {
+                    guard allowV4Tail, i == items.count - 1, let v4 = parseIPv4(String(g)) else { return nil }
+                    out.append((v4[0] << 8) | v4[1])
+                    out.append((v4[2] << 8) | v4[3])
+                } else {
+                    guard (1...4).contains(g.count), let v = Int(g, radix: 16) else { return nil }
+                    out.append(v)
+                }
+            }
+            return out
+        }
+        if halves.count == 1 {
+            guard let all = groups(s, allowV4Tail: true), all.count == 8 else { return nil }
+            return all
+        }
+        guard let head = groups(halves[0], allowV4Tail: false),
+              let tail = groups(halves[1], allowV4Tail: true),
+              head.count + tail.count <= 7 else { return nil }
+        return head + Array(repeating: 0, count: 8 - head.count - tail.count) + tail
     }
 
     static func parse(_ text: String) -> Link? {

@@ -189,18 +189,20 @@ object MigrationLink {
      * 又能往用户库里塞记录。
      */
     fun isLanAddress(address: String): Boolean {
-        val a = address.trim().substringBefore('%') // 去掉 IPv6 的 zone id
+        val trimmed = address.trim()
+        val a = trimmed.substringBefore('%') // 去掉 IPv6 的 zone id
         if (a.isEmpty()) return false
         if (a.contains(':')) {
-            val lower = a.lowercase()
-            return lower == "::1" ||
-                lower.startsWith("fe80:") || // 链路本地
-                lower.startsWith("fd") || lower.startsWith("fc") // 唯一本地地址 fc00::/7
+            // 必须能完整解析成 IPv6 数字字面量:"fd:x.attacker.example" 这种带冒号的主机名一律拒绝,
+            // 否则接收端会拿它去做域名解析
+            val h = parseIpv6(a) ?: return false
+            if (trimmed.contains('%') && !ZONE_ID.matches(trimmed.substringAfter('%'))) return false
+            return (h.take(7).all { it == 0 } && h[7] == 1) || // ::1
+                (h[0] and 0xFE00) == 0xFC00 || // 唯一本地地址 fc00::/7
+                (h[0] and 0xFFC0) == 0xFE80 // 链路本地 fe80::/10
         }
-        val parts = a.split('.')
-        if (parts.size != 4) return false
-        val n = parts.map { it.toIntOrNull() ?: return false }
-        if (n.any { it !in 0..255 }) return false
+        if (trimmed.contains('%')) return false
+        val n = parseIpv4(a) ?: return false
         return when {
             n[0] == 10 -> true
             n[0] == 127 -> true
@@ -209,6 +211,51 @@ object MigrationLink {
             n[0] == 169 && n[1] == 254 -> true // 链路本地
             else -> false
         }
+    }
+
+    private val ZONE_ID = Regex("[A-Za-z0-9_.-]{1,32}")
+
+    /** 严格的点分十进制:四段、每段 1–3 位纯数字、0..255(不接受 "+1"、"0x0a" 这类写法)。 */
+    private fun parseIpv4(s: String): IntArray? {
+        val parts = s.split('.')
+        if (parts.size != 4) return null
+        return IntArray(4) { i ->
+            val p = parts[i]
+            if (p.isEmpty() || p.length > 3 || !p.all { it in '0'..'9' }) return null
+            p.toInt().takeIf { it in 0..255 } ?: return null
+        }
+    }
+
+    /** RFC 4291 文本形式 → 8 个 16 位分组;支持 "::" 压缩与末尾内嵌 IPv4。非法返回 null。 */
+    private fun parseIpv6(s: String): IntArray? {
+        if (s.any { !(it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' || it == ':' || it == '.') }) return null
+        val dbl = s.indexOf("::")
+        if (dbl >= 0 && s.indexOf("::", dbl + 1) >= 0) return null
+        fun groups(part: String, allowV4Tail: Boolean): List<Int>? {
+            if (part.isEmpty()) return emptyList()
+            val items = part.split(':')
+            val out = ArrayList<Int>(8)
+            for ((i, g) in items.withIndex()) {
+                if (g.contains('.')) {
+                    if (!allowV4Tail || i != items.lastIndex) return null
+                    val v4 = parseIpv4(g) ?: return null
+                    out += (v4[0] shl 8) or v4[1]
+                    out += (v4[2] shl 8) or v4[3]
+                } else {
+                    if (g.isEmpty() || g.length > 4) return null
+                    out += g.toInt(16)
+                }
+            }
+            return out
+        }
+        if (dbl < 0) {
+            val all = groups(s, allowV4Tail = true) ?: return null
+            return if (all.size == 8) all.toIntArray() else null
+        }
+        val head = groups(s.substring(0, dbl), allowV4Tail = false) ?: return null
+        val tail = groups(s.substring(dbl + 2), allowV4Tail = true) ?: return null
+        if (head.size + tail.size > 7) return null
+        return (head + List(8 - head.size - tail.size) { 0 } + tail).toIntArray()
     }
 
     fun build(addresses: List<String>, port: Int, key: ByteArray): String {

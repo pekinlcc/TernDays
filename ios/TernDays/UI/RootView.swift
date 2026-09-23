@@ -34,6 +34,7 @@ struct RootView: View {
                 .tint(Td.accentDeep)
             } else {
                 OnboardingView {
+                    DataStore.shared.markOnboarded()
                     onboardingDone = true
                     PunchManager.shared.activate()
                     PunchManager.shared.punchIfNeeded()

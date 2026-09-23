@@ -41,12 +41,35 @@ final class DataStore {
             dir = legacy
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
+        // 「数据只存本机」:整个数据目录不进 iCloud / 电脑备份(换机用应用内扫码迁移)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var excluded = dir
+        try? excluded.setResourceValues(values)
         let p: LoadResult<Punch> = Self.loadList(punchesURL)
         let o: LoadResult<DayOverride> = Self.loadList(overridesURL)
         punches = p.list ?? []
         overrides = o.list ?? []
         punchesUnreadable = p.unreadable
         overridesUnreadable = o.unreadable
+    }
+
+    // MARK: 引导完成标记
+    // onboardingDone 存在 UserDefaults 里,会随 iCloud 备份恢复;数据目录却被排除在备份外。
+    // 在数据目录里再放一个标记,两者不一致时以标记为准,避免「跳过引导、库却是空的」。
+
+    private var onboardedMarkerURL: URL { dir.appendingPathComponent(".onboarded") }
+
+    var hasOnboardingMarker: Bool { FileManager.default.fileExists(atPath: onboardedMarkerURL.path) }
+
+    /// 本机有没有数据文件(只看文件在不在,锁屏读不出内容时也成立)
+    var hasStoredDataFiles: Bool {
+        let fm = FileManager.default
+        return fm.fileExists(atPath: punchesURL.path) || fm.fileExists(atPath: overridesURL.path)
+    }
+
+    func markOnboarded() {
+        FileManager.default.createFile(atPath: onboardedMarkerURL.path, contents: Data())
     }
 
     /// 读档结果:要区分「文件不存在」(全新安装,空数组是真相)与

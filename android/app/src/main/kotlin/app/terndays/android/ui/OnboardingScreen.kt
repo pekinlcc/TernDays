@@ -122,7 +122,8 @@ fun OnboardingScreen(onDone: () -> Unit) {
         Spacer(Modifier.height(12.dp))
         Text(
             "每天早上 7:00 和下午 5:00，TernDays 在后台各记录一次 GPS 定位，" +
-                "只保留“城市”级别的结果，用来统计你一年里在每座城市待了多少天。",
+                "统计你一年里在每座城市待了多少天。定位坐标只存在本机" +
+                "（城市库升级后用来重新判定），界面只显示城市。",
             fontSize = 14.sp, color = Td.Muted, lineHeight = 24.sp, textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
         )

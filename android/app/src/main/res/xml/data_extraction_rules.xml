@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+:打卡库(含原始坐标)与偏好不进系统云备份——「数据只存本机」的承诺。
+     两个域必须一起排除:只排库不排偏好,恢复后会出现「引导已完成、库却是空的」的错配。
+     本地换机(设备间直传)不经服务器,保持默认可带走,与扫码迁移互补。 -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+    </cloud-backup>
+</data-extraction-rules>

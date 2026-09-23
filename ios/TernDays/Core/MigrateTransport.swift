@@ -43,8 +43,9 @@ final class MigrateSendServer {
             }
             let listener = try NWListener(using: .tcp)
             self.listener = listener
-            listener.stateUpdateHandler = { [weak self] state in
-                guard let self else { return }
+            // 处理器里只弱引用 listener:否则 listener → handler → listener 成环,取消后也不释放
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
+                guard let self, let listener else { return }
                 switch state {
                 case .ready:
                     if let port = listener.port?.rawValue {
@@ -57,7 +58,8 @@ final class MigrateSendServer {
                 }
             }
             listener.newConnectionHandler = { [weak self] conn in
-                self?.handle(conn, blob: blob, fingerprint: fingerprint)
+                guard let self else { conn.cancel(); return }
+                self.handle(conn, blob: blob, fingerprint: fingerprint)
             }
             listener.start(queue: queue)
         } catch {
@@ -68,7 +70,11 @@ final class MigrateSendServer {
     private func handle(_ conn: NWConnection, blob: Data, fingerprint: Data) {
         conn.start(queue: queue)
         let helloLen = MigrationLink.magicHello.count + fingerprint.count
+        // 连上却迟迟不发暗号的陌生连接 5 秒后丢掉(回调都在同一串行队列上,标记无需加锁)
+        var helloSeen = false
+        queue.asyncAfter(deadline: .now() + 5) { if !helloSeen { conn.cancel() } }
         conn.receive(minimumIncompleteLength: helloLen, maximumLength: helloLen) { [weak self] data, _, _, _ in
+            helloSeen = true
             guard let self, !self.stopped else { conn.cancel(); return }
             guard let data, data.count == helloLen,
                   data.prefix(MigrationLink.magicHello.count) == MigrationLink.magicHello,
@@ -103,10 +109,12 @@ final class MigrateSendServer {
         }
     }
 
+    /// 调用方随后就会丢掉唯一的强引用:这里必须强持有 self 直到监听真正取消,
+    /// 否则 [weak self] 取到 nil,端口会一直开着
     func stop() {
-        queue.async { [weak self] in
-            self?.stopped = true
-            self?.stopListening()
+        queue.async { [self] in
+            stopped = true
+            stopListening()
         }
     }
 
@@ -183,7 +191,7 @@ enum MigrateImportClient {
     ) {
         guard index < link.addresses.count else {
             DispatchQueue.main.async {
-                onError("连不上旧手机。请确认:两台手机连着同一个 Wi-Fi(或本机连上旧手机的热点),旧手机的迁移页面还开着,然后重新扫码。")
+                onError("连不上旧手机。请确认:两台手机连着同一个 Wi-Fi(或本机连上旧手机的热点),旧手机的迁移页面还开着,并且已允许 TernDays 访问本地网络,然后重新扫码。")
             }
             return
         }
@@ -193,25 +201,48 @@ enum MigrateImportClient {
             port: NWEndpoint.Port(rawValue: link.port)!,
             using: .tcp
         )
+        // 以下状态只在 queue 上读写(计时器与 stateUpdateHandler 都跑在它上面)
         var settled = false
-        queue.asyncAfter(deadline: .now() + 6) {
-            if !settled {
+        var timerGeneration = 0
+        var askedLocalNetwork = false
+        let next = {
+            tryAddress(link: link, index: index + 1, onStatus: onStatus, onDone: onDone, onError: onError)
+        }
+        func arm(_ seconds: TimeInterval, onExpire: @escaping () -> Void) {
+            timerGeneration += 1
+            let generation = timerGeneration
+            queue.asyncAfter(deadline: .now() + seconds) {
+                guard !settled, generation == timerGeneration else { return }
                 settled = true
                 conn.cancel()
-                tryAddress(link: link, index: index + 1, onStatus: onStatus, onDone: onDone, onError: onError)
+                onExpire()
             }
         }
+        queue.async { arm(6, onExpire: next) }
         conn.stateUpdateHandler = { state in
             switch state {
             case .ready:
                 guard !settled else { return }
                 settled = true
                 transfer(conn: conn, link: link, queue: queue, onStatus: onStatus, onDone: onDone, onError: onError)
+            case .waiting(let err):
+                // 首次连接局域网时系统弹「本地网络」授权框,期间连接停在 PolicyDenied(-65570)。
+                // 这时不能按 6 秒超时换下一个地址(每个地址都会被同一个授权拦住):
+                // 暂停计时等用户点允许;一直没放行就明确说原因
+                if case .dns(let code) = err, code == -65570, !askedLocalNetwork, !settled {
+                    askedLocalNetwork = true
+                    DispatchQueue.main.async { onStatus("请在系统弹窗里允许 TernDays 访问本地网络…") }
+                    arm(45) {
+                        DispatchQueue.main.async {
+                            onError("TernDays 没有「本地网络」权限,连不上旧手机。请到 设置 → 隐私与安全性 → 本地网络 打开 TernDays,然后重新扫码。")
+                        }
+                    }
+                }
             case .failed, .cancelled:
                 if !settled {
                     settled = true
                     conn.cancel()
-                    tryAddress(link: link, index: index + 1, onStatus: onStatus, onDone: onDone, onError: onError)
+                    next()
                 }
             default: break
             }

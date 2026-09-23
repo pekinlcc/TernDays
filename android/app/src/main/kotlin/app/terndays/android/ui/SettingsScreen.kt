@@ -29,6 +29,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -41,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -53,11 +56,10 @@ import app.terndays.android.Prefs
 import app.terndays.android.R
 import app.terndays.android.db.PunchDb
 import app.terndays.android.geo.Cities
-import app.terndays.android.migrate.MigrateClient
+import app.terndays.android.migrate.MigrateImportSession
 import app.terndays.android.util.Perms
 import app.terndays.android.util.VendorKeepAlive
 import app.terndays.core.DayOverride
-import app.terndays.core.MigrationLink
 import app.terndays.core.OverrideScope
 import app.terndays.core.WidgetStyle
 import com.journeyapps.barcodescanner.ScanContract
@@ -90,24 +92,20 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
     ) { tick++ }
 
     var backfillOpen by remember { mutableStateOf(false) }
-    var importState by remember { mutableStateOf<ImportState?>(null) }
+    val importState = MigrateImportSession.state.value
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
         val text = result.contents ?: return@rememberLauncherForActivityResult
-        val link = MigrationLink.parse(text)
-        if (link == null) {
-            importState = ImportState.Failed("这不是 TernDays 的迁移二维码")
-        } else {
-            importState = ImportState.Working("正在连接旧手机…")
-            MigrateClient.run(
-                context, link,
-                onStatus = { msg -> importState = ImportState.Working(msg) },
-                onDone = { outcome ->
-                    importState = ImportState.Done(outcome)
-                    tick++
-                },
-                onError = { msg -> importState = ImportState.Failed(msg) },
-            )
-        }
+        MigrateImportSession.start(context, text)
+    }
+    // 导入完成要刷新本页数据(可补记天数等);导入期间保持亮屏,息屏会让传输中断
+    LaunchedEffect(importState is MigrateImportSession.State.Done) {
+        if (importState is MigrateImportSession.State.Done) tick++
+    }
+    val view = LocalView.current
+    DisposableEffect(importState is MigrateImportSession.State.Working) {
+        val working = importState is MigrateImportSession.State.Working
+        view.keepScreenOn = working
+        onDispose { if (working) view.keepScreenOn = false }
     }
 
     Column(Modifier.fillMaxSize().background(Td.Bg).statusBarsPadding().padding(horizontal = 20.dp)) {
@@ -402,7 +400,7 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
 
     when (val s = importState) {
         null -> Unit
-        is ImportState.Working -> Dialog(onDismissRequest = { }) {
+        is MigrateImportSession.State.Working -> Dialog(onDismissRequest = { }) {
             TdCard(Modifier.fillMaxWidth()) {
                 Column(
                     Modifier.padding(24.dp),
@@ -414,7 +412,7 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
                 }
             }
         }
-        is ImportState.Done -> Dialog(onDismissRequest = { importState = null }) {
+        is MigrateImportSession.State.Done -> Dialog(onDismissRequest = { MigrateImportSession.clear() }) {
             TdCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("导入完成 ✓", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Td.Ink)
@@ -432,12 +430,12 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
                     Text(
                         "好", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.AccentDeep,
                         modifier = Modifier.align(Alignment.End)
-                            .clickable { importState = null }.padding(8.dp),
+                            .clickable { MigrateImportSession.clear() }.padding(8.dp),
                     )
                 }
             }
         }
-        is ImportState.Failed -> Dialog(onDismissRequest = { importState = null }) {
+        is MigrateImportSession.State.Failed -> Dialog(onDismissRequest = { MigrateImportSession.clear() }) {
             TdCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("导入没有成功", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Td.Ink)
@@ -445,7 +443,7 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
                     Text(
                         "知道了", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.AccentDeep,
                         modifier = Modifier.align(Alignment.End)
-                            .clickable { importState = null }.padding(8.dp),
+                            .clickable { MigrateImportSession.clear() }.padding(8.dp),
                     )
                 }
             }
@@ -465,12 +463,6 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
             },
         )
     }
-}
-
-private sealed interface ImportState {
-    data class Working(val message: String) : ImportState
-    data class Done(val outcome: MigrateClient.Outcome) : ImportState
-    data class Failed(val message: String) : ImportState
 }
 
 @Composable
