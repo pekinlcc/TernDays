@@ -15,9 +15,19 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
 
     static let shared = PunchManager()
     static let refreshTaskId = "app.terndays.refresh"
+    /// 每日提醒的通知类别与「就记在这里」动作(后台执行,不打开应用)
+    static let punchCategoryId = "punch"
+    static let punchHereActionId = "punch-here"
+    private static let reminderIds = ["punch-morning", "punch-evening"]
 
     private let lm = CLLocationManager()
     @Published var authStatus: CLAuthorizationStatus = .notDetermined
+    /// 用户在系统里关了「精确位置」:城市级判定会漂到几公里外,设置页要提示
+    @Published var accuracyReduced = false
+    /// 暂停自动打卡(App Group 持久化,见 AppPrefs.punchPaused)
+    @Published private(set) var paused = AppPrefs.punchPaused
+    /// 最近一次自动打卡尝试的结论(首页「最近一次尝试 …」)
+    @Published private(set) var lastAttempt: LastAttempt? = LastAttempt.load()
     /// 待决的一次性定位回调。只在主线程访问(CLLocationManager 在主线程创建,
     /// delegate 回调也在主线程),新请求追加而不是覆盖——BGAppRefresh 与开屏打卡
     /// 同时到来时,两个回调都会被兑现,后台任务不再因回调被覆盖而以失败收场。
@@ -33,6 +43,7 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
         lm.desiredAccuracy = kCLLocationAccuracyHundredMeters
         lm.pausesLocationUpdatesAutomatically = true
         authStatus = lm.authorizationStatus
+        accuracyReduced = lm.accuracyAuthorization == .reducedAccuracy
     }
 
     // MARK: 权限与常驻监听
@@ -76,8 +87,15 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
         lm.authorizationStatus == .authorizedAlways || lm.authorizationStatus == .authorizedWhenInUse
     }
 
-    /// 引导完成后调用：开启 SLC、注册每日提醒、排后台刷新
+    /// 引导完成后调用：开启 SLC、注册每日提醒、排后台刷新。
+    /// 暂停期间反过来:停 SLC、撤掉待发的每日提醒、取消后台刷新(旧手机留作备用时不再各记各的)。
     func activate() {
+        if AppPrefs.punchPaused {
+            lm.stopMonitoringSignificantLocationChanges()
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: Self.reminderIds)
+            BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.refreshTaskId)
+            return
+        }
         if hasAlways {
             lm.startMonitoringSignificantLocationChanges()
         }
@@ -85,11 +103,35 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
         scheduleBackgroundRefresh()
     }
 
+    /// 暂停 / 恢复自动打卡。恢复时重新 activate,并立刻按当前时段补打一次。
+    func setPaused(_ on: Bool) {
+        AppPrefs.punchPaused = on
+        DispatchQueue.main.async { self.paused = on }
+        activate()
+        if !on { punchIfNeeded() }
+    }
+
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        DispatchQueue.main.async { self.authStatus = manager.authorizationStatus }
-        if manager.authorizationStatus == .authorizedAlways {
+        let reduced = manager.accuracyAuthorization == .reducedAccuracy
+        DispatchQueue.main.async {
+            self.authStatus = manager.authorizationStatus
+            self.accuracyReduced = reduced
+        }
+        if manager.authorizationStatus == .authorizedAlways && !AppPrefs.punchPaused {
             manager.startMonitoringSignificantLocationChanges()
         }
+    }
+
+    /// 记下这次尝试的结论(App Group 持久化 + 首页即时刷新)
+    private func noteAttempt(_ outcome: LastAttempt.Outcome, slot: Slot?, detail: String = "") {
+        let attempt = LastAttempt.record(outcome, slot: slot, detail: detail)
+        DispatchQueue.main.async { self.lastAttempt = attempt }
+    }
+
+    /// 清除全部数据后:最近一次尝试也一并清掉
+    func clearLastAttempt() {
+        LastAttempt.clear()
+        DispatchQueue.main.async { self.lastAttempt = nil }
     }
 
     // MARK: 打卡
@@ -108,9 +150,16 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
     }
 
     private func punchIfNeededInner(with location: CLLocation?, completion: (() -> Void)?) {
+        // 暂停期间:SLC / 后台刷新 / 通知动作都可能还会把应用拉起来,一律不打
+        if AppPrefs.punchPaused {
+            noteAttempt(.paused, slot: nil)
+            completion?()
+            return
+        }
         // 数据文件还读不出来(重启后首次解锁前被后台拉起):此时既存不进去,
         // 也会把「空库」误当成首次安装去打首点。先试着解封,解不开就这次不打。
         guard DataStore.shared.reloadIfSealed() else {
+            noteAttempt(.sealed, slot: nil)
             completion?()
             return
         }
@@ -155,12 +204,15 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
             } else {
                 if !self.hasAnyAuth {
                     // 权限被关掉是另一回事:提示要说清原因,别让用户以为是定位没搜到
+                    self.noteAttempt(.noPermission, slot: slot)
                     self.notifyPermissionMissing()
                 } else if !self.hasAlways, UIApplication.shared.applicationState != .active {
                     // 只有「使用期间」:应用在后台时拿不到位置,原因要说对
+                    self.noteAttempt(.needsAlways, slot: slot)
                     self.notifyNeedsAlways()
                 } else {
                     // 完全拿不到位置:提醒用户打开应用补打(对齐 Android 的失败通知)
+                    self.noteAttempt(.noLocation, slot: slot)
                     self.notifyPunchFailed(slot: slot)
                 }
                 completion?()
@@ -222,8 +274,13 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
     private func record(_ decision: Decision, location: CLLocation, fromCache: Bool, then done: (() -> Void)? = nil) {
         DispatchQueue.global(qos: .userInitiated).async { [self] in
             let saved = recordSync(decision, location: location, fromCache: fromCache)
+            if let city = saved {
+                noteAttempt(.recorded, slot: decision.slot, detail: city)
+                // 天数变了:看看有没有阈值接近 / 达到(同一窗口期只提醒一次)
+                ThresholdAlerts.checkAndNotify()
+            }
             DispatchQueue.main.async {
-                if saved {
+                if saved != nil {
                     WidgetCenter.shared.reloadAllTimelines()
                     NotificationCenter.default.post(name: .terndaysDataChanged, object: nil)
                     // 打上了:撤掉这个时段的旧失败提醒
@@ -234,8 +291,9 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
         }
     }
 
+    /// @return 记下的城市名;没有新插入(该时段已有记录)返回 nil
     @discardableResult
-    private func recordSync(_ decision: Decision, location: CLLocation, fromCache: Bool) -> Bool {
+    private func recordSync(_ decision: Decision, location: CLLocation, fromCache: Bool) -> String? {
         let slot = decision.slot
         // 交叉验证：top-3 候选 + 上一次打卡的行程连续性 + 定位误差圈，
         // 消掉真实边界（深圳/香港、珠海/澳门…）附近的最近邻模糊
@@ -268,7 +326,7 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
             fromCache: fromCache,
             viaContext: resolution?.viaContext ?? false
         )
-        return DataStore.shared.insertPunch(punch)
+        return DataStore.shared.insertPunch(punch) ? punch.cityName : nil
     }
 
     // MARK: CLLocationManagerDelegate
@@ -328,11 +386,27 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
 
     // MARK: 本地通知（07:00 / 17:00 提醒）
 
+    /// 通知类别:每日提醒上长按 / 下拉出「就记在这里」,后台直接打卡,不必打开应用。
+    /// options 为空(不带 .foreground):点了不拉起界面,由 AppDelegate 在后台跑一次打卡。
+    func registerNotificationCategories() {
+        let here = UNNotificationAction(identifier: Self.punchHereActionId, title: "就记在这里", options: [])
+        let category = UNNotificationCategory(
+            identifier: Self.punchCategoryId, actions: [here], intentIdentifiers: [], options: []
+        )
+        UNUserNotificationCenter.current().setNotificationCategories([category])
+    }
+
+    /// 每日提醒:可在设置里关掉,或改为静默(不响铃、不亮屏,只进通知中心)。暂停期间不排。
     func scheduleDailyReminders() {
         let center = UNUserNotificationCenter.current()
+        guard AppPrefs.remindersOn, !AppPrefs.punchPaused else {
+            center.removePendingNotificationRequests(withIdentifiers: Self.reminderIds)
+            return
+        }
+        let silent = AppPrefs.remindersSilent
         center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
             guard granted else { return }
-            center.removePendingNotificationRequests(withIdentifiers: ["punch-morning", "punch-evening"])
+            center.removePendingNotificationRequests(withIdentifiers: Self.reminderIds)
             for (id, hour, text) in [
                 ("punch-morning", PunchRules.morningHour, "早上 7 点：打开应用记录当前城市"),
                 ("punch-evening", PunchRules.eveningHour, "下午 5 点：打开应用记录当前城市"),
@@ -340,7 +414,13 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
                 let content = UNMutableNotificationContent()
                 content.title = "TernDays 打卡"
                 content.body = text
-                content.sound = .default
+                content.categoryIdentifier = Self.punchCategoryId
+                if silent {
+                    content.sound = nil
+                    content.interruptionLevel = .passive
+                } else {
+                    content.sound = .default
+                }
                 var dc = DateComponents()
                 dc.hour = hour
                 dc.minute = 0
@@ -376,6 +456,7 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
     }
 
     func scheduleBackgroundRefresh() {
+        guard !AppPrefs.punchPaused else { return }
         let request = BGAppRefreshTaskRequest(identifier: Self.refreshTaskId)
         request.earliestBeginDate = PunchRules.nextPunchDate()
         try? BGTaskScheduler.shared.submit(request)

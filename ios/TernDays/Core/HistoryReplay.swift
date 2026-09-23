@@ -17,11 +17,27 @@ enum HistoryReplay {
             uniquingKeysWith: { first, _ in first }
         )
 
+        // 同一个地方(家、公司)天天打卡,坐标几乎不变:最近邻按 1e-4°(约 11 米)缓存一次重放内的结果
+        // (与 Android 同一键):3.4 万点全表扫描不再逐条重复,结果逐条不变
+        // (1e-4° 以内的两个点,top-3 候选与距离差异远小于判定边距)。
+        var memo: [Int64: [CityMatcher.Match]] = [:]
+        func candidatesFor(_ lat: Double, _ lng: Double) -> [CityMatcher.Match] {
+            // 导入的数据可能带着离谱坐标:转 Int64 前先挡住,否则溢出直接崩
+            guard lat.isFinite, lng.isFinite, abs(lat) <= 90, abs(lng) <= 180 else {
+                return matcher.nearestByCity(lat: lat, lng: lng, k: 3)
+            }
+            let k = Int64((lat * 10_000).rounded()) * 4_000_000 + Int64((lng * 10_000).rounded())
+            if let hit = memo[k] { return hit }
+            let found = matcher.nearestByCity(lat: lat, lng: lng, k: 3)
+            memo[k] = found
+            return found
+        }
+
         var outcomes: [(date: LocalDate, slot: Slot, key: String, name: String, via: Bool)] = []
         var anchorKey: String?
         var anchorEpochMs: Int64 = 0
         for p in punches {
-            let candidates = matcher.nearestByCity(lat: p.lat, lng: p.lng, k: 3)
+            let candidates = candidatesFor(p.lat, p.lng)
             let prev = anchorKey.map {
                 CityResolver.Prev(cityKey: $0, ageHours: Double(p.epochMs - anchorEpochMs) / 3_600_000)
             }

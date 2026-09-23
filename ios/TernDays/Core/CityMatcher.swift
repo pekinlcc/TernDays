@@ -132,11 +132,6 @@ final class CityMatcher {
             .map { SearchHit(cityKey: $0.key, cityName: nameOf[$0.key] ?? $0.key, region: Self.regionOf($0.key)) }
     }
 
-    /// 旧签名兼容
-    func search(name query: String, limit: Int = 20) -> [(key: String, name: String)] {
-        searchHits(query, limit: limit).map { (key: $0.cityKey, name: $0.cityName) }
-    }
-
     static func isDomestic(_ key: String) -> Bool {
         key.hasPrefix("CN:") || key.hasPrefix("HK:") || key.hasPrefix("MO:")
     }
@@ -151,7 +146,10 @@ final class CityMatcher {
         return (admin1.isEmpty || admin1 == cc) ? country : "\(country)·\(admin1)"
     }
 
-    /// 常见国家码 → 中文名(仅搜索消歧展示用)
+    /// 国家码 → 中文名;未收录的返回原码(按国家/地区汇总用,与 Android CityMatcher.countryName 同表)。
+    static func countryName(_ cc: String) -> String { ccNames[cc] ?? cc }
+
+    /// 常见国家码 → 中文名(搜索消歧与按国家汇总展示用,未覆盖的显示原码)
     private static let ccNames: [String: String] = [
         "SG": "新加坡", "JP": "日本", "KR": "韩国", "TH": "泰国", "MY": "马来西亚",
         "ID": "印尼", "VN": "越南", "PH": "菲律宾", "IN": "印度", "US": "美国",

@@ -22,6 +22,10 @@ enum Td {
     static let onAccent = Color(light: 0xFFFFFF, dark: 0x10222E)
     /// 装饰性箭头等次要图形
     static let chevron = Color(light: 0xC3CCD4, dark: 0x57667A)
+    /// 中性浅底:检查中的标签、日历里「其他城市」的日子等不该抢眼的底色
+    static let neutralSoft = Color(light: 0xEDF1F4, dark: 0x2A3542)
+    /// 早点的太阳图标(深色模式提亮,保证对比度)
+    static let sunrise = Color(light: 0xA9762F, dark: 0xD8A85A)
 }
 
 extension Color {

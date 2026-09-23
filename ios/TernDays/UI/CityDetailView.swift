@@ -1,5 +1,4 @@
 import SwiftUI
-import WidgetKit
 
 struct CityDetailView: View {
     let cityKey: String
@@ -30,6 +29,27 @@ struct CityDetailView: View {
 
     private var stat: CityStat? { data?.stats.cities.first { $0.cityKey == cityKey } }
 
+    /// 日历格子的样子:这座城市(全天 / 半天 / 进行中)、别的城市、无记录(开始记录日之后、今天之前)、其余留白
+    private enum CellKind {
+        case city(CityDay)
+        case other
+        case missing
+        case blank
+    }
+
+    private func kind(of date: LocalDate, days: [LocalDate: CityDay]) -> CellKind {
+        if let d = days[date] { return .city(d) }
+        guard let attr = data?.stats.days[date] else { return .blank }
+        if !attr.shares.isEmpty { return .other }
+        if let since = data?.stats.trackingSince, date >= since, date < LocalDate.today() { return .missing }
+        return .blank
+    }
+
+    /// 这座城市作为更正候选的第一项
+    private var thisCity: CityOption? {
+        stat.map { CityOption(key: $0.cityKey, name: $0.cityName, note: "本页城市") }
+    }
+
     var body: some View {
         let days = cityDays
         ScrollView {
@@ -49,7 +69,7 @@ struct CityDetailView: View {
                 HStack {
                     Text("打卡明细").font(.system(size: 13, weight: .medium)).foregroundColor(Td.muted)
                     Spacer()
-                    Text("点一天可更正城市").font(.system(size: 11)).foregroundColor(Td.faint)
+                    Text("点日历或明细里的一天可更正 / 补记").font(.system(size: 11)).foregroundColor(Td.faint)
                 }
                 .padding(.horizontal, 2)
 
@@ -65,38 +85,13 @@ struct CityDetailView: View {
         // 后台打卡、别处更正、城市库重解析之后这里也要跟上(此前只在进入时读一次)
         .onReceive(NotificationCenter.default.publisher(for: .terndaysDataChanged)) { _ in reload() }
         .sheet(item: $correcting, onDismiss: dismissIfCityGone) { target in
-            let dayPunches = (data?.punches ?? []).filter { $0.localDate == target.date }
-            CityCorrectSheet(
-                date: target.date,
-                currentCityName: data?.stats.days[target.date]?.shares.map(\.cityName).joined(separator: " + "),
-                recentCities: data?.stats.cities.map { ($0.cityKey, $0.cityName) } ?? [],
-                hasOverride: data?.overrides.contains { $0.localDate == target.date } ?? false,
-                allowHalfScope: {
-                    let f = DayCounting.halfSampleFlags(
-                        morning: dayPunches.first { $0.slot == .morning },
-                        evening: dayPunches.first { $0.slot == .evening },
-                        extra: dayPunches.first { $0.slot == .extra }
-                    )
-                    return f.0 || f.1
-                }(),
-                existing: data?.overrides.filter { $0.localDate == target.date } ?? [],
-                onPick: { key, name, scope in
-                    DataStore.shared.setOverride(DayOverride(localDate: target.date, cityKey: key, cityName: name, scope: scope))
-                    afterCorrection()
-                },
-                onRestoreAuto: {
-                    DataStore.shared.removeOverride(date: target.date)
-                    afterCorrection()
-                }
-            )
+            // 写入由 Corrections 统一完成(刷新小组件、通知本页与首页重读、toast 带撤销)
+            CityCorrectSheet(context: target.context) { correcting = nil }
         }
     }
 
-    private func afterCorrection() {
-        WidgetCenter.shared.reloadAllTimelines()
-        correcting = nil
-        // 通知会触发本页与首页一起重读
-        NotificationCenter.default.post(name: .terndaysDataChanged, object: nil)
+    private func openCorrection(_ date: LocalDate) {
+        correcting = CorrectTarget(date: date, preferred: thisCity)
     }
 
     /// 后台读、主线程赋值(城市库大、年份长时读档不该卡住界面)
@@ -144,29 +139,59 @@ struct CityDetailView: View {
                 }
                 let cells: [LocalDate?] = Array(repeating: nil, count: leading) +
                     (1...count).map { LocalDate(year: year, month: month, day: $0) }
+                let todayDate = LocalDate.today()
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 7), spacing: 4) {
                     ForEach(0..<cells.count, id: \.self) { i in
-                        let date = cells[i]
-                        let day = date.flatMap { days[$0] }
-                        dayCell(date: date, day: day)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                if let date, day != nil { correcting = CorrectTarget(date: date) }
-                            }
+                        calendarCell(cells[i], days: days, today: todayDate)
                     }
                 }
-                HStack(spacing: 6) {
-                    RoundedRectangle(cornerRadius: 4).fill(Td.accentSoft).frame(width: 14, height: 14)
-                    Text("全天").font(.system(size: 11)).foregroundColor(Td.muted)
-                    halfSwatch.frame(width: 14, height: 14).padding(.leading, 8)
-                    Text("半天").font(.system(size: 11)).foregroundColor(Td.muted)
+                legend
+                HStack {
                     Spacer()
                     Text("本月 \(DayCounting.formatDays(monthSum)) 天")
                         .font(.system(size: 12, weight: .semibold)).foregroundColor(Td.accentDeep)
                 }
-                .padding(.top, 2)
             }
             .padding(14)
+        }
+    }
+
+    /// 今天及以前的每一天都能点:别的城市、没有记录的日子也能直接改成(补成)这座城市
+    @ViewBuilder
+    private func calendarCell(_ date: LocalDate?, days: [LocalDate: CityDay], today: LocalDate) -> some View {
+        if let date {
+            let k = kind(of: date, days: days)
+            if date <= today {
+                dayCell(date: date, kind: k)
+                    .contentShape(Rectangle())
+                    .onTapGesture { openCorrection(date) }
+                    .accessibilityAddTraits(.isButton)
+            } else {
+                dayCell(date: date, kind: k)
+            }
+        } else {
+            Color.clear.frame(height: 42)
+        }
+    }
+
+    private var legend: some View {
+        HStack(spacing: 10) {
+            legendItem("全天") { RoundedRectangle(cornerRadius: 4).fill(Td.accentSoft) }
+            legendItem("半天") { halfSwatch(Td.accentSoft) }
+            legendItem("进行中") { halfSwatch(Td.warmSoft) }
+            legendItem("其他城市") { RoundedRectangle(cornerRadius: 4).fill(Td.neutralSoft) }
+            legendItem("无记录") {
+                RoundedRectangle(cornerRadius: 4).stroke(Td.chevron, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 2)
+    }
+
+    private func legendItem<S: View>(_ label: String, @ViewBuilder swatch: () -> S) -> some View {
+        HStack(spacing: 4) {
+            swatch().frame(width: 12, height: 12)
+            Text(label).font(.system(size: 11)).foregroundColor(Td.muted).lineLimit(1)
         }
     }
 
@@ -176,11 +201,15 @@ struct CityDetailView: View {
                 .font(.system(size: 13, weight: .semibold)).foregroundColor(Td.ink)
                 .frame(width: 32, height: 32)
                 .background(RoundedRectangle(cornerRadius: 10).fill(Td.bg))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(system == "chevron.left" ? "上个月" : "下个月")
     }
 
-    private var halfSwatch: some View {
+    /// 左上三角填色的「半天」色块
+    private func halfSwatch(_ color: Color, radius: CGFloat = 4) -> some View {
         GeometryReader { geo in
             Path { p in
                 p.move(to: .zero)
@@ -188,37 +217,46 @@ struct CityDetailView: View {
                 p.addLine(to: CGPoint(x: 0, y: geo.size.height))
                 p.closeSubpath()
             }
-            .fill(Td.accentSoft)
+            .fill(color)
         }
-        .background(RoundedRectangle(cornerRadius: 4).stroke(Td.accentSoft, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .background(RoundedRectangle(cornerRadius: radius).stroke(color, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: radius))
     }
 
     @ViewBuilder
-    private func dayCell(date: LocalDate?, day: CityDay?) -> some View {
-        ZStack {
-            if let day {
-                if day.weight >= 1.0 {
-                    RoundedRectangle(cornerRadius: 10).fill(Td.accentSoft)
-                } else {
-                    GeometryReader { geo in
-                        Path { p in
-                            p.move(to: .zero)
-                            p.addLine(to: CGPoint(x: geo.size.width, y: 0))
-                            p.addLine(to: CGPoint(x: 0, y: geo.size.height))
-                            p.closeSubpath()
-                        }
-                        .fill(Td.accentSoft)
-                    }
-                    .background(RoundedRectangle(cornerRadius: 10).stroke(Td.accentSoft, lineWidth: 1))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                }
+    private func cellBackground(_ kind: CellKind) -> some View {
+        switch kind {
+        case .city(let day):
+            if day.provisional {
+                halfSwatch(Td.warmSoft, radius: 10)
+            } else if day.weight >= 1.0 {
+                RoundedRectangle(cornerRadius: 10).fill(Td.accentSoft)
+            } else {
+                halfSwatch(Td.accentSoft, radius: 10)
             }
-            if let date {
-                Text("\(date.day)")
-                    .font(.system(size: 13, weight: day != nil ? .semibold : .regular))
-                    .foregroundColor(day == nil ? Td.faint : (day!.weight >= 1.0 ? Td.accentDeep : Td.ink))
-            }
+        case .other:
+            RoundedRectangle(cornerRadius: 10).fill(Td.neutralSoft)
+        case .missing:
+            RoundedRectangle(cornerRadius: 10).stroke(Td.chevron, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+        case .blank:
+            Color.clear
+        }
+    }
+
+    private func dayCell(date: LocalDate, kind: CellKind) -> some View {
+        var weight: Font.Weight = .regular
+        var color: Color = Td.faint
+        if case .city(let day) = kind {
+            weight = .semibold
+            color = day.weight >= 1.0 && !day.provisional ? Td.accentDeep : Td.ink
+        } else if case .other = kind {
+            color = Td.muted
+        }
+        return ZStack {
+            cellBackground(kind)
+            Text("\(date.day)")
+                .font(.system(size: 13, weight: weight))
+                .foregroundColor(color)
         }
         .frame(height: 42)
     }
@@ -264,7 +302,7 @@ struct CityDetailView: View {
                     }
                     .padding(.vertical, 11)
                     .contentShape(Rectangle())
-                    .onTapGesture { correcting = CorrectTarget(date: date) }
+                    .onTapGesture { openCorrection(date) }
                 }
             }
             .padding(.horizontal, 16)

@@ -32,6 +32,14 @@ enum Exporter {
         }
     }
 
+    /// 「2026 年」;自定义区间 / 滚动窗口写成「2026-03-29 至 2026-09-24」(与 Android 逐字一致)
+    static func periodLabel(_ stats: YearStats) -> String {
+        if stats.firstDate == LocalDate(year: stats.year, month: 1, day: 1) && stats.lastDate.year == stats.year {
+            return "\(stats.year) 年"
+        }
+        return "\(stats.firstDate) 至 \(stats.lastDate)"
+    }
+
     /// 「手动」只标在确实来自更正的那一份上(与 Android :core Exporter 逐字一致)
     private static func attributionText(_ attr: DayAttribution) -> String {
         if attr.shares.isEmpty { return attr.provisional ? "今天进行中（待记录）" : "无记录" }
@@ -68,7 +76,7 @@ enum Exporter {
     }
 
     private static func dailyTable(_ stats: YearStats, _ punches: [Punch]) -> [[String]] {
-        var rows: [[String]] = [["日期", "星期", "早打卡", "早城市", "晚打卡", "晚城市", "首点", "计入", "备注"]]
+        var rows: [[String]] = [["日期", "星期", "早打卡", "早城市", "晚打卡", "晚城市", "首点", "计入", "备注", "时区"]]
         let daily = dailyRows(stats: stats, punches: punches)
         if daily.isEmpty {
             rows.append(["尚未开始记录"])
@@ -96,8 +104,29 @@ enum Exporter {
                 r.extra.map { "首 \($0.clock) \($0.cityName)" } ?? "",
                 attributionText(r.attribution),
                 notes.joined(separator: "；"),
+                zoneText(r),
             ])
         }
+        return rows
+    }
+
+    /// 出差跨时区时,打卡时刻按当地时间写,这一列说明是哪里的时间(早、晚、首点顺序去重)
+    private static func zoneText(_ r: DailyRow) -> String {
+        var labels: [String] = []
+        for p in [r.morning, r.evening, r.extra].compactMap({ $0 }) {
+            let label = Fmt.zoneLabel(zoneId: p.zoneId, epochMs: p.epochMs)
+            if !labels.contains(label) { labels.append(label) }
+        }
+        return labels.joined(separator: " / ")
+    }
+
+    /// 行程段:同城连续的日子合成一段(见 Stays)。
+    private static func staysTable(_ stats: YearStats) -> [[String]] {
+        var rows: [[String]] = [["城市", "开始", "结束", "天数"]]
+        for s in Stays.fold(stats.days) {
+            rows.append([s.cityName, s.from.description, s.to.description, DayCounting.formatDays(s.days)])
+        }
+        if rows.count == 1 { rows.append(["尚未开始记录"]) }
         return rows
     }
 
@@ -115,10 +144,12 @@ enum Exporter {
     }
 
     static func exportCsv(stats: YearStats, punches: [Punch], includeSummary: Bool, includeDaily: Bool,
-                          exportedAt: Date? = nil) -> String {
+                          exportedAt: Date? = nil, includeStays: Bool = false) -> String {
         var parts: [String] = []
-        if includeSummary { parts.append("# 城市汇总 · \(stats.year) 年\r\n" + csv(summaryTable(stats, exportedAt: exportedAt))) }
-        if includeDaily { parts.append("# 每日明细 · \(stats.year) 年\r\n" + csv(dailyTable(stats, punches))) }
+        let period = periodLabel(stats)
+        if includeSummary { parts.append("# 城市汇总 · \(period)\r\n" + csv(summaryTable(stats, exportedAt: exportedAt))) }
+        if includeDaily { parts.append("# 每日明细 · \(period)\r\n" + csv(dailyTable(stats, punches))) }
+        if includeStays { parts.append("# 行程段 · \(period)\r\n" + csv(staysTable(stats))) }
         return "\u{FEFF}" + parts.joined(separator: "\r\n\r\n")
     }
 
@@ -166,10 +197,11 @@ enum Exporter {
     }
 
     static func exportXlsx(stats: YearStats, punches: [Punch], includeSummary: Bool, includeDaily: Bool,
-                           exportedAt: Date? = nil) -> Data {
+                           exportedAt: Date? = nil, includeStays: Bool = false) -> Data {
         var sheets: [(String, [[String]])] = []
         if includeSummary { sheets.append(("城市汇总", summaryTable(stats, exportedAt: exportedAt))) }
         if includeDaily { sheets.append(("每日明细", dailyTable(stats, punches))) }
+        if includeStays { sheets.append(("行程段", staysTable(stats))) }
         if sheets.isEmpty { sheets.append(("城市汇总", summaryTable(stats, exportedAt: exportedAt))) }
 
         var contentTypes = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"

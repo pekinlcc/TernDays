@@ -43,7 +43,7 @@ struct OnboardingView: View {
                         .font(.system(size: 56)).foregroundColor(Td.accent)
                         .padding(.bottom, 40)
                     HStack(spacing: 10) {
-                        timeChip(icon: "sun.max", tint: Color(hex: 0xA9762F), text: "07:00")
+                        timeChip(icon: "sun.max", tint: Td.sunrise, text: "07:00")
                         timeChip(icon: "sunset", tint: Td.muted, text: "17:00")
                     }
                     .offset(y: 16)
@@ -96,9 +96,16 @@ struct OnboardingView: View {
                         .padding(.top, 8)
                 }
 
-                Button("稍后再说") { onDone() }
-                    .font(.system(size: 14)).foregroundColor(Td.muted)
-                    .padding(.top, 12)
+                Button {
+                    onDone()
+                } label: {
+                    Text("稍后再说")
+                        .font(.system(size: 14)).foregroundColor(Td.muted)
+                        .padding(.horizontal, 16)
+                        .tapTarget()
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 12)
 
                 Text("iOS 不允许后台精确定时任务：实际通过位置变化唤醒、\n定时提醒和打开应用补打完成，时间会有浮动")
                     .font(.system(size: 11)).foregroundColor(Td.faint)

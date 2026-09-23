@@ -134,13 +134,15 @@ struct TernProvider: TimelineProvider {
             nowHour: Calendar.current.component(.hour, from: when),
             earliestRecordDate: DataStore.shared.earliestRecordDate()
         )
+        // 展示口径(Top 3、天数格式、元旦空态)与 Android 共用 WidgetSummary,不再各写一份
+        let model = WidgetSummary.build(stats: stats, topN: 3)
         return TernEntry(
             date: when,
-            yearLabel: "\(String(day.year)) 年",
-            top: stats.cities.prefix(3).enumerated().map { i, c in
-                TopCity(id: i, name: c.cityName, days: DayCounting.formatDays(c.days))
+            yearLabel: model.yearLabel,
+            top: model.topCities.enumerated().map { i, c in
+                TopCity(id: i, name: c.name, days: c.days)
             },
-            newYearEmpty: stats.cities.isEmpty && (stats.trackingSince.map { $0.year < day.year } ?? false),
+            newYearEmpty: model.newYearEmpty,
             year: day.year
         )
     }

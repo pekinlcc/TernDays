@@ -70,7 +70,24 @@ jobs:
       - uses: actions/checkout@v4
       - name: Xcode version
         run: xcodebuild -version
+      # Swift 端的计天 / 导出 / 行程 / 地区与 Android :core 逐项对齐(同一份 fixtures/core-cases.json)。
+      # 只编译纯 Foundation 的 Shared + Core 文件(不含 UIKit/WidgetKit/Network),不属于任何 Xcode target
+      - name: Fixture parity (Swift vs Kotlin :core)
+        run: |
+          swiftc -O -o fixturecheck \
+            ios/Shared/*.swift \
+            ios/TernDays/Core/CityMatcher.swift \
+            ios/TernDays/Core/CityResolver.swift \
+            ios/TernDays/Core/HistoryReplay.swift \
+            ios/TernDays/Core/Regions.swift \
+            ios/TernDays/Core/Exporter.swift \
+            ios/TernDays/Core/Migration.swift \
+            ios/TernDays/Core/Backup.swift \
+            ios/FixtureCheck/main.swift
+          TZ=Asia/Shanghai ./fixturecheck fixtures/core-cases.json
       - name: Build iOS app + widget (simulator, unsigned)
+        # 对齐检查失败也照样编译:一次 CI 同时报出两边的问题
+        if: ${{ !cancelled() }}
         run: |
           set -o pipefail
           xcodebuild -project ios/TernDays.xcodeproj -alltargets -configuration Debug \

@@ -22,7 +22,7 @@ iOS 不允许应用在后台精确定时执行任务，因此打卡通过多路�
 | --- | --- |
 | 显著位置变化（SLC） | 「始终允许」定位下，设备明显移动时系统唤醒应用，若在打卡窗口内且缺记录则就地记录 |
 | BGAppRefreshTask | 系统择机唤醒（倾向于你常用应用的时间段），窗口内补打 |
-| 本地通知 | 每天 07:00 / 17:00 提醒，点开应用即完成补打 |
+| 本地通知 | 每天 07:00 / 17:00 提醒（可关、可静默），点开应用或在通知上选「就记在这里」即完成补打 |
 | 前台补打 | 任何时候打开应用，处于窗口内且缺记录就自动补打 |
 
 补捕窗口与 Android 相同：早点 07:00–11:59、晚点 17:00–23:59；同一天同一时段只保留最早一条记录。
@@ -34,11 +34,13 @@ iOS 不允许应用在后台精确定时执行任务，因此打卡通过多路�
 Shared/           两个 target 共用：数据模型、计天算法、打卡窗口规则、存储（App Group 容器，
                   未配置 App Group 时退回沙盒并自动迁移旧数据）
 TernDays/
-  Core/           离线城市匹配、CSV/XLSX 导出
+  Core/           离线城市匹配、CSV/XLSX 导出、按国家/地区汇总、天数提醒、加密备份、迁移传输
   Data/           城市库加载
   Punch/          PunchManager：定位权限、SLC、BGTask、本地通知、小组件刷新
   UI/             首页 / 城市日历详情 / 导出 / 设置(补记) / 引导
   cities.tsv      离线城市库（tools/build_city_dataset.py 生成）
 TernDaysWidget/   桌面小组件（systemSmall（2×2）：今年 Top 3 城市及天数），
                   打卡/补记/切换外观/时区变化后即时刷新；时间线另排零点条目，并在下一个打卡时间点后兜底刷新
+FixtureCheck/     双端口径对齐检查（不属于任何 target）：CI 用 swiftc 把 Shared + Core 的纯 Foundation 文件
+                  与 main.swift 编成命令行程序，读 fixtures/core-cases.json 逐项比对 Android :core 的输出
 ```

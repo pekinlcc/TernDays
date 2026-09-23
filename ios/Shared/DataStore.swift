@@ -218,13 +218,11 @@ final class DataStore {
         queue.sync { !punches.isEmpty }
     }
 
-    /// 行程连续性锚点:最近一条**非改判**(viaContext != true)且解析成功的打卡。
-    /// 被连续性/误差圈粘住的点不作锚,36h 上限才能真正限制整条粘滞链。
-    func latestAnchorPunch() -> Punch? {
-        queue.sync {
-            punches.filter { $0.cityKey != "unknown" && $0.viaContext != true }
-                .max { $0.epochMs < $1.epochMs }
-        }
+    /// 行程连续性锚点:最近一条**非改判**(viaContext != true)、解析成功、且**不晚于现在**的打卡
+    /// (Anchors.pick,与 Android 同一口径)。被连续性/误差圈粘住的点不作锚,36h 上限才能真正限制整条粘滞链;
+    /// 系统时间曾被拨到未来留下的记录也不作锚,否则链龄为负、粘滞链永不过期。
+    func latestAnchorPunch(nowMs: Int64 = Anchors.nowMs()) -> Punch? {
+        queue.sync { Anchors.pick(punches, nowMs: nowMs) }
     }
 
     /// 该日的整天更正(锚点参照只认整天更正)。
@@ -268,6 +266,45 @@ final class DataStore {
         }
     }
 
+    /// 区间(含首尾)内的打卡,按时间升序。跨年区间 / 最近 180 天 / 相邻日建议都走这里。
+    func punchesBetween(_ from: LocalDate, _ to: LocalDate) -> [Punch] {
+        queue.sync {
+            punches.filter { $0.localDate >= from && $0.localDate <= to }.sorted { $0.epochMs < $1.epochMs }
+        }
+    }
+
+    func overridesBetween(_ from: LocalDate, _ to: LocalDate) -> [DayOverride] {
+        queue.sync { overrides.filter { $0.localDate >= from && $0.localDate <= to } }
+    }
+
+    /// 打卡 + 手动记录总条数(「确定清除全部 N 条记录?」)
+    func recordCount() -> Int {
+        queue.sync { punches.count + overrides.count }
+    }
+
+    /// 最近去过的城市(按最近一次出现的日期倒序、去重),补记 / 更正时作候选。
+    func recentCities(limit: Int = 8) -> [(key: String, name: String)] {
+        queue.sync {
+            var items: [(date: LocalDate, ms: Int64, key: String, name: String)] = []
+            items.reserveCapacity(punches.count + overrides.count)
+            for p in punches where p.cityKey != "unknown" {
+                items.append((p.localDate, p.epochMs, p.cityKey, p.cityName))
+            }
+            for o in overrides {
+                items.append((o.localDate, Int64.max, o.cityKey, o.cityName))
+            }
+            items.sort { a, b in a.date != b.date ? a.date > b.date : a.ms > b.ms }
+            var seen = Set<String>()
+            var out: [(key: String, name: String)] = []
+            for it in items where !seen.contains(it.key) {
+                seen.insert(it.key)
+                out.append((key: it.key, name: it.name))
+                if out.count >= limit { break }
+            }
+            return out
+        }
+    }
+
     func punchesForYear(_ year: Int) -> [Punch] {
         queue.sync { punches.filter { $0.localDate.year == year }.sorted { $0.epochMs < $1.epochMs } }
     }
@@ -286,6 +323,78 @@ final class DataStore {
             }
             overrides.append(o)
             persist()
+        }
+    }
+
+    /// 批量写入(区间补记):与 setOverride 同一套互斥规则(Backfill.merge),只落盘一次。
+    func setOverrides(_ list: [DayOverride]) {
+        guard !list.isEmpty else { return }
+        queue.sync {
+            overrides = Backfill.merge(existing: overrides, planned: list)
+            persist()
+        }
+    }
+
+    /// 这些日子现有的手动更正(写入前的快照,撤销用)。
+    func overridesOn(_ dates: Set<LocalDate>) -> [DayOverride] {
+        queue.sync { overrides.filter { dates.contains($0.localDate) } }
+    }
+
+    /// 撤销:把这些日子的手动更正原样换回快照(快照为空 = 这些日子恢复为没有更正)。
+    func replaceOverrides(on dates: Set<LocalDate>, with snapshot: [DayOverride]) {
+        queue.sync {
+            overrides.removeAll { dates.contains($0.localDate) }
+            overrides.append(contentsOf: snapshot.filter { dates.contains($0.localDate) })
+            persist()
+        }
+    }
+
+    /// 删除指定的打卡(系统时间被拨到未来留下的记录)。按 (日期, 时段, 时刻) 精确定位。@return 删了几条
+    @discardableResult
+    func deletePunches(_ targets: [Punch]) -> Int {
+        queue.sync {
+            let keys = Set(targets.map { "\($0.localDate)|\($0.slot.rawValue)|\($0.epochMs)" })
+            let before = punches.count
+            punches.removeAll { keys.contains("\($0.localDate)|\($0.slot.rawValue)|\($0.epochMs)") }
+            let removed = before - punches.count
+            if removed > 0 { persist() }
+            return removed
+        }
+    }
+
+    /// 清除本机全部记录:删数据文件、清内存。用户明确要求清除,封印中(读不出来)的文件也照删。
+    /// 引导标记保留(清空后仍按已完成引导使用,下一次打卡即新的「首点」)。
+    /// @return false = 有文件没删掉(被数据保护锁着),界面提示解锁后重试
+    @discardableResult
+    func clearAll() -> Bool {
+        queue.sync {
+            let fm = FileManager.default
+            var ok = true
+            if fm.fileExists(atPath: punchesURL.path) {
+                do {
+                    try fm.removeItem(at: punchesURL)
+                    punches = []
+                    punchesUnreadable = false
+                } catch {
+                    ok = false
+                }
+            } else {
+                punches = []
+                punchesUnreadable = false
+            }
+            if fm.fileExists(atPath: overridesURL.path) {
+                do {
+                    try fm.removeItem(at: overridesURL)
+                    overrides = []
+                    overridesUnreadable = false
+                } catch {
+                    ok = false
+                }
+            } else {
+                overrides = []
+                overridesUnreadable = false
+            }
+            return ok
         }
     }
 
@@ -318,6 +427,14 @@ final class DataStore {
         let punchesSkipped: Int
         let overridesAdded: Int
         let overridesSkipped: Int
+        /// 跳过的记录里,键相同但城市不同的条数(完全相同的只是重复,不算):
+        /// 结果页写「其中 K 条与旧手机不一致,已保留本机版本」
+        var punchesConflicting: Int = 0
+        var overridesConflicting: Int = 0
+
+        var added: Int { punchesAdded + overridesAdded }
+        var skipped: Int { punchesSkipped + overridesSkipped }
+        var conflicting: Int { punchesConflicting + overridesConflicting }
     }
 
     /// 迁移导入合并:打卡按 (日期, 时段)、手动记录按 (日期, 范围) 去重,本机已有的一律保留;
@@ -333,22 +450,37 @@ final class DataStore {
             guard !(punchesUnreadable || overridesUnreadable) else { throw MergeError.notSaved }
             let savedPunches = punches
             let savedOverrides = overrides
-            var pAdded = 0, pSkipped = 0, oAdded = 0, oSkipped = 0
+            var pAdded = 0, pSkipped = 0, oAdded = 0, oSkipped = 0, pConflict = 0, oConflict = 0
+            // (日期|时段) → 本机那条:几千条对几千条逐一 contains 是平方级,换成字典
+            var local: [String: Punch] = [:]
+            for p in punches {
+                let k = "\(p.localDate)|\(p.slot.rawValue)"
+                if local[k] == nil { local[k] = p }
+            }
             for p in newPunches {
-                if punches.contains(where: { $0.localDate == p.localDate && $0.slot == p.slot }) {
+                let k = "\(p.localDate)|\(p.slot.rawValue)"
+                if let mine = local[k] {
                     pSkipped += 1
+                    if MergeRules.isConflict(local: mine, incoming: p) { pConflict += 1 }
                 } else {
                     punches.append(p)
+                    local[k] = p
                     pAdded += 1
                 }
             }
             for o in newOverrides {
-                let existing = Set(overrides.filter { $0.localDate == o.localDate }.map(\.scope))
+                let sameDay = overrides.filter { $0.localDate == o.localDate }
+                let existing = Set(sameDay.map(\.scope))
                 if MergeRules.shouldImportOverride(existing: existing, incoming: o.scope) {
                     overrides.append(o)
                     oAdded += 1
                 } else {
                     oSkipped += 1
+                    // 键(日期+范围)相同且城市不同才算不一致;整天 vs 半天这类互斥跳过不算
+                    if let mine = sameDay.first(where: { $0.scope == o.scope }),
+                       MergeRules.isConflict(local: mine, incoming: o) {
+                        oConflict += 1
+                    }
                 }
             }
             if pAdded + oAdded > 0 && !persist() {
@@ -356,7 +488,10 @@ final class DataStore {
                 overrides = savedOverrides
                 throw MergeError.notSaved
             }
-            return MergeResult(punchesAdded: pAdded, punchesSkipped: pSkipped, overridesAdded: oAdded, overridesSkipped: oSkipped)
+            return MergeResult(
+                punchesAdded: pAdded, punchesSkipped: pSkipped, overridesAdded: oAdded, overridesSkipped: oSkipped,
+                punchesConflicting: pConflict, overridesConflicting: oConflict
+            )
         }
     }
 
