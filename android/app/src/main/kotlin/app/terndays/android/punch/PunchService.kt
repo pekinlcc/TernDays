@@ -3,7 +3,6 @@ package app.terndays.android.punch
 import android.Manifest
 import android.app.Notification
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -17,15 +16,19 @@ import android.os.CancellationSignal
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import app.terndays.android.DataBus
 import app.terndays.android.Prefs
 import app.terndays.android.R
 import app.terndays.android.TernDaysApp
 import app.terndays.android.db.PunchDb
 import app.terndays.android.geo.Cities
-import app.terndays.android.ui.MainActivity
+import app.terndays.android.util.Intents
+import app.terndays.android.util.Perms
+import app.terndays.android.widget.TernDaysWidgetProvider
 import app.terndays.core.CityResolver
 import app.terndays.core.Punch
 import app.terndays.core.PunchRules
@@ -34,33 +37,46 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 前台服务：取一次定位 → 离线解析城市 → 落库 → 退出。
- * 由精确闹钟（PunchReceiver）、开机补打（BootReceiver）或打开应用补打触发。
+ * 由精确闹钟（PunchReceiver）、重试闹钟、开机/时区变更补打（BootReceiver）或打开应用补打触发。
+ *
+ * 状态按**请求**管理:一轮定位期间又来的请求(例如首点还在定位时 17:00 晚点闹钟到了)排进
+ * [pending],拿到定位后为每个待决请求各落一条;落库期间才到的请求,落库后再开新一轮。
+ * 此前整个服务共用一份「已交付」标记且永不复位,后到的请求会被静默吞掉。
  */
 class PunchService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
-    private val delivered = AtomicBoolean(false)
+
+    /** 等这一轮定位的请求(同一个定位可以同时满足首点与正式时段)。以下字段只在主线程读写。 */
+    private val pending = ArrayList<Decision>()
+    private var locating = false
+    private var writing = 0
+    /** 每轮定位的代次:过期的超时、迟到的回调一律作废 */
+    private var generation = 0
     private val cancelSignals = ArrayList<CancellationSignal>()
     private val legacyListeners = ArrayList<LocationListener>()
-
-    /** 候选定位里目前最准的一个(全部回调都在主线程,不需要加锁)。 */
     private var bestFix: Location? = null
     private var settleScheduled = false
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var lastStartId = 0
 
     /**
      * 一次打卡的「决策上下文」:归属日期、时段、是否延迟,都在决定打这一次时就定下来。
      * 拿到定位后再重算会踩跨零点竞态——23:59 触发的晚点若 00:01 才拿到定位,
-     * 会被写成第二天并占掉次日的晚点槽。
+     * 会被写成第二天并占掉次日的晚点槽。isRetry 决定失败后还要不要再排重试(只重试一次)。
      */
-    private data class Decision(val date: LocalDate, val slot: Slot, val delayed: Boolean)
+    private data class Decision(val date: LocalDate, val slot: Slot, val delayed: Boolean, val isRetry: Boolean)
+
+    /** 一轮定位拿不到位置的原因:决定提醒文案、以及要不要排重试。 */
+    private enum class Failure { NO_FIX, LOCATION_OFF, PERMISSION }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        lastStartId = startId
         try {
             ServiceCompat.startForeground(
                 this, NOTIF_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
@@ -68,11 +84,11 @@ class PunchService : Service() {
         } catch (_: SecurityException) {
             // Android 14+ 定位权限被收回后,location 类型前台服务直接抛异常:
             // 不能崩,发提醒并安静退出(下一次闹钟到点会再试)
-            notifyRemind("定位权限被关闭", "打卡需要「始终允许」定位权限,请到设置中重新开启")
-            stopSelf()
+            remindOnce(LocalDate.now(), null, "perm", PERM_TITLE, PERM_TEXT)
+            stopIfIdle()
             return START_NOT_STICKY
         } catch (_: IllegalStateException) {
-            stopSelf()
+            stopIfIdle()
             return START_NOT_STICKY
         }
 
@@ -80,16 +96,20 @@ class PunchService : Service() {
         val requested = intent?.getStringExtra(PunchScheduler.EXTRA_SLOT)
             ?.let { runCatching { Slot.valueOf(it) }.getOrNull() }
         val isRetry = intent?.getBooleanExtra(PunchScheduler.EXTRA_RETRY, false) == true
+        val fromForeground = intent?.getBooleanExtra(EXTRA_FOREGROUND, false) == true
         val inWindow = PunchRules.slotInWindow(now.toLocalTime())
         val slot = when {
             inWindow != null -> inWindow
             requested == Slot.EXTRA -> Slot.EXTRA // 首点：首次安装立即记录，不限时段
             else -> {
-                // 闹钟被系统推迟到窗口外：本时段作废，提醒可补记（重试落到窗口外时不再重复打扰）
-                if (requested != null && !isRetry) {
-                    notifyRemind("未能按时记录${slotLabel(requested)}", "打开应用可查看，无记录的日子可手动补记")
+                // 闹钟(或重试)被系统推迟到窗口外：本时段作废。重试落到窗口外同样要说一声,不能静默
+                if (requested != null) {
+                    remindOnce(
+                        now.toLocalDate(), requested, "late",
+                        "${slotLabel(requested)}没能按时记录", LATE_TEXT,
+                    )
                 }
-                finish()
+                stopIfIdle()
                 return START_NOT_STICKY
             }
         }
@@ -98,23 +118,39 @@ class PunchService : Service() {
             date = now.toLocalDate(),
             slot = slot,
             delayed = PunchRules.isDelayed(now.toLocalTime(), slot),
+            isRetry = isRetry,
         )
 
-        val db = PunchDb.get(this)
-        if (db.hasPunch(decision.date, slot)) {
-            finish()
+        if (PunchDb.get(this).hasPunch(decision.date, slot) ||
+            pending.any { it.date == decision.date && it.slot == slot }
+        ) {
+            stopIfIdle()
             return START_NOT_STICKY
         }
-        // 用户选「大致位置」时只有 COARSE:精度差但仍能判到城市(误差圈规则会兜底),
-        // 不该当成「没有权限」直接不打卡
+        // 用户选「大致位置」时只有 COARSE:精度差但仍能判到城市(误差圈规则会兜底)
         if (!hasLocationPermission()) {
-            notifyRemind("定位权限被关闭", "打卡需要「始终允许」定位权限，请到设置中重新开启")
-            finish()
+            remindOnce(decision.date, slot, "perm", PERM_TITLE, PERM_TEXT)
+            stopIfIdle()
+            return START_NOT_STICKY
+        }
+        // 后台触发(闹钟/开机/时区变化/重试)而定位只是「仅使用期间」:拿不到位置,
+        // 不必白等 90 秒再报一个错的原因
+        if (!fromForeground && !Perms.backgroundLocation(this)) {
+            remindOnce(decision.date, slot, "bg", BG_TITLE, BG_TEXT)
+            stopIfIdle()
             return START_NOT_STICKY
         }
 
-        requestLocation(decision)
+        pending.add(decision)
+        if (!locating && writing == 0) requestLocation()
         return START_NOT_STICKY
+    }
+
+    override fun onDestroy() {
+        stopLocationUpdates()
+        handler.removeCallbacksAndMessages(null)
+        releaseWakeLock()
+        super.onDestroy()
     }
 
     private fun hasLocationPermission(): Boolean =
@@ -123,13 +159,19 @@ class PunchService : Service() {
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
 
-    private fun requestLocation(decision: Decision) {
+    private fun requestLocation() {
         val lm = getSystemService(LocationManager::class.java)
+        generation++
+        val gen = generation
+        locating = true
+        bestFix = null
+        settleScheduled = false
+        // 最长要等 90 秒:Handler 按 uptime 计时,深睡时不走,必须持有唤醒锁
+        acquireWakeLock()
 
-        // 系统定位总开关关掉时不必白等 90 秒(还会常驻一条前台通知)
+        // 系统定位总开关关掉时不必白等 90 秒,也不排重试(重试同样拿不到)
         if (Build.VERSION.SDK_INT >= 28 && !lm.isLocationEnabled) {
-            notifyRemind("定位服务已关闭", "打开系统「定位服务」后会自动恢复打卡；现在打开应用可立即补打")
-            onLocation(decision, bestCached(lm), fromCache = true)
+            deliver(gen, bestCached(lm), fromCache = true, failure = Failure.LOCATION_OFF)
             return
         }
 
@@ -144,7 +186,7 @@ class PunchService : Service() {
             if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) add(LocationManager.NETWORK_PROVIDER)
         }
         if (providers.isEmpty()) {
-            onLocation(decision, bestCached(lm), fromCache = true)
+            deliver(gen, bestCached(lm), fromCache = true, failure = Failure.LOCATION_OFF)
             return
         }
 
@@ -153,44 +195,43 @@ class PunchService : Service() {
                 for (p in providers) {
                     val signal = CancellationSignal()
                     cancelSignals.add(signal)
-                    lm.getCurrentLocation(p, signal, mainExecutor) { loc -> onCandidate(decision, loc) }
+                    lm.getCurrentLocation(p, signal, mainExecutor) { loc -> onCandidate(gen, loc) }
                 }
             } else {
                 for (p in providers) {
-                    val listener = LocationListener { loc -> onCandidate(decision, loc) }
+                    val listener = LocationListener { loc -> onCandidate(gen, loc) }
                     legacyListeners.add(listener)
                     @Suppress("DEPRECATION")
                     lm.requestSingleUpdate(p, listener, Looper.getMainLooper())
                 }
             }
         } catch (_: SecurityException) {
-            notifyRemind("定位权限被关闭", "打卡需要「始终允许」定位权限，请到设置中重新开启")
-            finish()
+            deliver(gen, null, fromCache = false, failure = Failure.PERMISSION)
             return
         }
 
         handler.postDelayed({
-            // 超时兜底：用最近的缓存位置（6 小时内），城市级别通常仍然正确
-            onLocation(decision, bestFix ?: bestCached(lm), fromCache = bestFix == null)
+            // 超时兜底：用本轮最好的候选,没有就用最近的缓存位置（6 小时内），城市级别通常仍然正确
+            deliver(gen, bestFix ?: bestCached(lm), fromCache = bestFix == null, failure = Failure.NO_FIX)
         }, TIMEOUT_MS)
     }
 
     /**
-     * 收到一个候选定位。**不再谁先回调就用谁**——NETWORK 往往最先回来但误差上千米，
-     * 正是边界城市误判的上游。够准就立即采用，否则再给更准的 provider 一小段时间。
+     * 收到一个候选定位。**不谁先回调就用谁**——NETWORK 往往最先回来但误差上千米，
+     * 正是边界城市误判的上游。够准就立即采用，否则再给更准的定位源一小段时间。
      */
-    private fun onCandidate(decision: Decision, loc: Location?) {
-        if (loc == null || delivered.get()) return
+    private fun onCandidate(gen: Int, loc: Location?) {
+        if (loc == null || gen != generation || !locating) return
         if (isBetter(loc, bestFix)) bestFix = loc
         val acc = bestFix?.takeIf { it.hasAccuracy() }?.accuracy
         if (acc != null && acc <= GOOD_ACCURACY_M) {
-            onLocation(decision, bestFix, fromCache = false)
+            deliver(gen, bestFix, fromCache = false, failure = Failure.NO_FIX)
             return
         }
         if (!settleScheduled) {
             settleScheduled = true
             handler.postDelayed({
-                onLocation(decision, bestFix, fromCache = false)
+                deliver(gen, bestFix, fromCache = false, failure = Failure.NO_FIX)
             }, SETTLE_MS)
         }
     }
@@ -212,36 +253,43 @@ class PunchService : Service() {
         null
     }
 
-    private fun onLocation(decision: Decision, location: Location?, fromCache: Boolean) {
-        val slot = decision.slot
-        if (!delivered.compareAndSet(false, true)) return
-        handler.removeCallbacksAndMessages(null)
+    private fun stopLocationUpdates() {
         cancelSignals.forEach { runCatching { it.cancel() } }
+        cancelSignals.clear()
         val lm = getSystemService(LocationManager::class.java)
         legacyListeners.forEach { runCatching { lm.removeUpdates(it) } }
+        legacyListeners.clear()
+    }
+
+    /**
+     * 结束一轮定位。location 为 null = 没拿到,按原因提醒/重试;
+     * 否则为本轮所有待决请求各落一条(已有记录的跳过)。
+     */
+    private fun deliver(gen: Int, location: Location?, fromCache: Boolean, failure: Failure) {
+        if (gen != generation || !locating) return
+        locating = false
+        handler.removeCallbacksAndMessages(null)
+        stopLocationUpdates()
+        val decisions = pending.toList()
+        pending.clear()
 
         if (location == null) {
-            // 窗口内还有时间就自己再试一次,不必等用户打开应用
-            if (PunchScheduler.scheduleRetryIfInWindow(this, slot)) {
-                finish()
-                return
-            }
-            notifyRemind(
-                "${slotLabel(slot)}打卡失败",
-                "没拿到定位。打开应用会立即补打；已过窗口的日子可在首页点「纠正」手动指定城市",
-            )
-            finish()
+            decisions.forEach { onFailed(it, failure) }
+            stopIfIdle()
             return
         }
 
+        writing++
+        val app = applicationContext
         Thread {
+            var saved = false
             try {
                 // 交叉验证：top-3 候选 + 行程连续性锚点 + 定位误差圈，
                 // 消掉真实边界（深圳/香港、珠海/澳门…）附近的最近邻模糊。
                 // 锚点 = 最近一条非改判打卡(当日有手动更正则以更正为准),防粘滞链自续期。
-                val db = PunchDb.get(this)
+                val db = PunchDb.get(app)
                 val accuracy = if (location.hasAccuracy()) location.accuracy.toDouble() else null
-                val candidates = Cities.get(this).nearestByCity(location.latitude, location.longitude, 3)
+                val candidates = Cities.get(app).nearestByCity(location.latitude, location.longitude, 3)
                 val prev = db.latestAnchorPunch()?.let { anchor ->
                     val key = db.overrideFor(anchor.localDate)?.cityKey ?: anchor.cityKey
                     CityResolver.Prev(
@@ -252,76 +300,143 @@ class PunchService : Service() {
                 val resolution = CityResolver.resolve(candidates, accuracy, prev)
                 val match = resolution?.match
                 val zone = ZoneId.systemDefault()
-                val punch = Punch(
-                    // 归属日期/时段/延迟一律取决策时刻:跨零点拿到的定位不会跑到第二天去
-                    localDate = decision.date,
-                    slot = slot,
-                    epochMs = System.currentTimeMillis(),
-                    zoneId = zone.id,
-                    lat = location.latitude,
-                    lng = location.longitude,
-                    accuracyM = accuracy,
-                    cityKey = match?.cityKey ?: "unknown",
-                    cityName = match?.cityName ?: "未知位置",
-                    delayed = decision.delayed,
-                    fromCache = fromCache,
-                    viaContext = resolution?.viaContext == true,
-                )
-                db.insertPunch(punch)
-                app.terndays.android.widget.TernDaysWidgetProvider.updateAll(this)
-                app.terndays.android.DataBus.bump()
+                val nowMs = System.currentTimeMillis()
+                for (d in decisions) {
+                    if (db.hasPunch(d.date, d.slot)) continue
+                    val punch = Punch(
+                        // 归属日期/时段/延迟一律取决策时刻:跨零点拿到的定位不会跑到第二天去
+                        localDate = d.date,
+                        slot = d.slot,
+                        epochMs = nowMs,
+                        zoneId = zone.id,
+                        lat = location.latitude,
+                        lng = location.longitude,
+                        accuracyM = accuracy,
+                        cityKey = match?.cityKey ?: "unknown",
+                        cityName = match?.cityName ?: "未知位置",
+                        delayed = d.delayed,
+                        fromCache = fromCache,
+                        viaContext = resolution?.viaContext == true,
+                    )
+                    if (db.insertPunch(punch)) saved = true
+                }
+                if (saved) {
+                    TernDaysWidgetProvider.updateAll(app)
+                    DataBus.bump()
+                }
             } catch (_: Exception) {
-                // 落库线程不允许把整个进程带崩;失败提醒用户手动补
-                runCatching { notifyRemind("打卡保存失败", "打开应用可自动补打,或在设置中手动补记") }
+                // 落库线程不允许把整个进程带崩;失败提醒用户
+                runCatching { notifyRemind("打卡保存失败", FAIL_TEXT) }
             } finally {
-                handler.post { finish() }
+                handler.post {
+                    writing--
+                    if (saved) {
+                        // 打上了:撤掉这个时段的重试与旧的失败提醒,别留着和首页矛盾的通知
+                        PunchScheduler.cancelRetry(this)
+                        if (failure == Failure.LOCATION_OFF) {
+                            // 定位关着但有缓存:这次先记上了,提醒一次打开定位
+                            decisions.firstOrNull()?.let {
+                                remindOnce(it.date, it.slot, "off", OFF_TITLE, OFF_CACHED_TEXT)
+                            }
+                        } else {
+                            getSystemService(NotificationManager::class.java).cancel(NOTIF_REMIND_ID)
+                        }
+                    }
+                    if (pending.isNotEmpty() && !locating) requestLocation() else stopIfIdle()
+                }
             }
         }.start()
     }
 
-    private fun buildNotification(): Notification {
-        val pi = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        return NotificationCompat.Builder(this, TernDaysApp.CHANNEL_PUNCH)
+    private fun onFailed(d: Decision, failure: Failure) {
+        when (failure) {
+            Failure.LOCATION_OFF -> remindOnce(d.date, d.slot, "off", OFF_TITLE, OFF_TEXT)
+            Failure.PERMISSION -> remindOnce(d.date, d.slot, "perm", PERM_TITLE, PERM_TEXT)
+            Failure.NO_FIX -> {
+                // 窗口内还有时间且这次不是重试:10 分钟后自己再试一次(只一次)
+                if (!PunchScheduler.scheduleRetry(this, d.date, d.slot, d.isRetry)) {
+                    remindOnce(d.date, d.slot, "fail", "${slotLabel(d.slot)}打卡失败", FAIL_TEXT)
+                }
+            }
+        }
+    }
+
+    /** 没有进行中的定位、落库与待决请求时才真正退出。 */
+    private fun stopIfIdle() {
+        if (locating || writing > 0 || pending.isNotEmpty()) return
+        releaseWakeLock()
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        stopSelfResult(lastStartId)
+    }
+
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        wakeLock = runCatching {
+            getSystemService(PowerManager::class.java)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "TernDays:punch")
+                .apply { acquire(TIMEOUT_MS + 30_000L) }
+        }.getOrNull()
+    }
+
+    private fun releaseWakeLock() {
+        wakeLock?.let { if (it.isHeld) runCatching { it.release() } }
+        wakeLock = null
+    }
+
+    private fun buildNotification(): Notification =
+        NotificationCompat.Builder(this, TernDaysApp.CHANNEL_PUNCH)
             .setSmallIcon(R.drawable.ic_stat_tern)
             .setContentTitle("正在记录当前城市…")
-            .setContentIntent(pi)
+            .setContentIntent(Intents.openApp(this))
             .setOngoing(true)
             .build()
+
+    /**
+     * 同一天同一时段同一类原因只提醒一次:此前定位总开关关着时每 10 分钟响一次铃。
+     */
+    private fun remindOnce(date: LocalDate, slot: Slot?, kind: String, title: String, text: String) {
+        val key = "$date|${slot?.name ?: "-"}|$kind"
+        if (Prefs.lastRemindKey(this) == key) return
+        Prefs.setLastRemindKey(this, key)
+        notifyRemind(title, text)
     }
 
     private fun notifyRemind(title: String, text: String) {
-        val pi = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
         val n = NotificationCompat.Builder(this, TernDaysApp.CHANNEL_REMIND)
             .setSmallIcon(R.drawable.ic_stat_tern)
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setContentIntent(pi)
+            .setContentIntent(Intents.openApp(this))
+            .setOnlyAlertOnce(true)
             .setAutoCancel(true)
             .build()
         getSystemService(NotificationManager::class.java).notify(NOTIF_REMIND_ID, n)
     }
 
-    private fun finish() {
-        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-        stopSelf()
-    }
-
     companion object {
         private const val NOTIF_ID = 10
-        private const val NOTIF_REMIND_ID = 11
+        const val NOTIF_REMIND_ID = 11
         private const val TIMEOUT_MS = 90_000L
-        /** 收到第一个候选后再等这么久,给更准的 provider 机会 */
+        /** 收到第一个候选后再等这么久,给更准的定位源机会 */
         private const val SETTLE_MS = 12_000L
         /** 误差小于此值即视为够准,不再等待 */
         private const val GOOD_ACCURACY_M = 80f
         private const val CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000L
+
+        /** 由用户在前台触发(打开应用):此时「仅使用期间」的定位权限也够用 */
+        const val EXTRA_FOREGROUND = "foreground"
+
+        // 提醒文案统一在这里(此前三处各写一份,还混着半角逗号)
+        private const val PERM_TITLE = "定位权限被关闭"
+        private const val PERM_TEXT = "打卡需要「始终允许」定位权限，请到设置中重新开启"
+        private const val BG_TITLE = "后台打卡需要「始终允许」"
+        private const val BG_TEXT = "定位权限现在是「仅使用期间」，到点时应用在后台拿不到位置。请在系统设置里改为「始终允许」"
+        private const val OFF_TITLE = "系统定位服务已关闭"
+        private const val OFF_TEXT = "这次没能记录。打开系统「定位服务」后会恢复自动打卡；现在打开应用可立即补打"
+        private const val OFF_CACHED_TEXT = "这次先用最近的位置记上了。请打开系统「定位服务」，否则之后会记不上"
+        private const val FAIL_TEXT = "没拿到定位。打开应用会立即补打；已过窗口的日子可在首页点「纠正」手动指定城市"
+        private const val LATE_TEXT = "系统把这次打卡推迟到了窗口之外。打开应用可查看，可在首页点「纠正」手动指定城市"
 
         private fun slotLabel(slot: Slot) = when (slot) {
             Slot.MORNING -> "早上 7 点"
@@ -329,26 +444,24 @@ class PunchService : Service() {
             Slot.EXTRA -> "首点"
         }
 
-        fun start(context: Context, slot: Slot?, isRetry: Boolean = false) {
+        fun start(context: Context, slot: Slot?, isRetry: Boolean = false, fromForeground: Boolean = false) {
             val intent = Intent(context, PunchService::class.java)
             if (slot != null) intent.putExtra(PunchScheduler.EXTRA_SLOT, slot.name)
             if (isRetry) intent.putExtra(PunchScheduler.EXTRA_RETRY, true)
+            if (fromForeground) intent.putExtra(EXTRA_FOREGROUND, true)
             try {
                 ContextCompat.startForegroundService(context, intent)
             } catch (_: Exception) {
                 // 后台前台服务被系统限制（常见于国产 ROM）：退化为提醒
                 val nm = context.getSystemService(NotificationManager::class.java)
-                val pi = PendingIntent.getActivity(
-                    context, 0, Intent(context, MainActivity::class.java),
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                )
                 nm.notify(
                     NOTIF_REMIND_ID,
                     NotificationCompat.Builder(context, TernDaysApp.CHANNEL_REMIND)
                         .setSmallIcon(R.drawable.ic_stat_tern)
                         .setContentTitle("打卡被系统拦下了")
                         .setContentText("点这里打开应用完成打卡，并在设置中开启自启动/后台运行")
-                        .setContentIntent(pi)
+                        .setContentIntent(Intents.openApp(context))
+                        .setOnlyAlertOnce(true)
                         .setAutoCancel(true)
                         .build(),
                 )
@@ -356,12 +469,13 @@ class PunchService : Service() {
         }
 
         /**
-         * 打开应用/开机时调用：
+         * 打开应用/开机/时区变化时调用：
          *  1. 处于打卡窗口内且该时段缺记录 → 补打该时段；
          *  2. 否则若从未有过任何记录（首次安装）→ 立即打一个「首点」（EXTRA），
          *     不占早/晚槽，只作所在半天的兜底样本。
+         * @param fromForeground 用户打开应用时为 true(「仅使用期间」的定位也能用)
          */
-        fun maybeBackfill(context: Context) {
+        fun maybeBackfill(context: Context, fromForeground: Boolean = false) {
             if (!Prefs.onboardingDone(context)) return
             val app = context.applicationContext
             // DB 查询(首次含建库)不占主线程
@@ -375,8 +489,8 @@ class PunchService : Service() {
                         hasEvening = db.hasPunch(now.toLocalDate(), Slot.EVENING),
                     )
                     when {
-                        slot != null -> start(app, slot)
-                        !db.hasAnyPunch() -> start(app, Slot.EXTRA)
+                        slot != null -> start(app, slot, fromForeground = fromForeground)
+                        !db.hasAnyPunch() -> start(app, Slot.EXTRA, fromForeground = fromForeground)
                     }
                 } catch (_: Exception) {
                     // 补打检查失败不影响主流程,下次打开再试

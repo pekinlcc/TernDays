@@ -12,6 +12,13 @@ object Prefs {
         sp(context).edit().putBoolean("onboarding_done", true).apply()
     }
 
+    /** 最近一次提醒的去重键「日期|时段|原因」:同一原因同一时段只提醒一次。 */
+    fun lastRemindKey(context: Context): String? = sp(context).getString("last_remind_key", null)
+
+    fun setLastRemindKey(context: Context, key: String) {
+        sp(context).edit().putString("last_remind_key", key).apply()
+    }
+
     /** 桌面小组件的底面外观（素面 / 系统材质 / 品牌渐变）。 */
     fun widgetStyle(context: Context): WidgetStyle =
         WidgetStyle.from(sp(context).getString("widget_style", null))

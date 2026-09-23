@@ -1,6 +1,7 @@
 package app.terndays.core
 
 import java.time.Duration
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZonedDateTime
@@ -17,6 +18,35 @@ object PunchRules {
     val MORNING_WINDOW_END: LocalTime = LocalTime.of(12, 0)
 
     val DELAY_TOLERANCE: Duration = Duration.ofMinutes(15)
+
+    /** 定位失败后隔多久重试(只重试一次)。 */
+    val RETRY_DELAY: Duration = Duration.ofMinutes(10)
+
+    /**
+     * 定位失败后的重试时刻;不该重试时返回 null。
+     *
+     * - **只重试一次**:这次本身就是重试(isRetry)就不再排——连续失败多半是权限或定位总开关的问题,
+     *   再试也拿不到,只会反复开 GPS、反复打扰(v0.9.1–v0.11 曾一路重试到窗口关闭)
+     * - 窗口终点按**决策日期**算,不按「现在」的日期:23:58 决定的晚点若 00:01 才判定失败,
+     *   窗口已经关了,不能排到第二天去
+     * - 首点(EXTRA)不重试:用户打开应用就会再打
+     */
+    fun retryAt(
+        decisionDate: LocalDate,
+        slot: Slot,
+        now: LocalDateTime,
+        isRetry: Boolean,
+        delay: Duration = RETRY_DELAY,
+    ): LocalDateTime? {
+        if (isRetry) return null
+        val windowEnd = when (slot) {
+            Slot.MORNING -> decisionDate.atTime(MORNING_WINDOW_END)
+            Slot.EVENING -> decisionDate.plusDays(1).atStartOfDay()
+            Slot.EXTRA -> return null
+        }
+        val at = now.plus(delay)
+        return if (at.isBefore(windowEnd)) at else null
+    }
 
     fun targetTime(slot: Slot): LocalTime? = when (slot) {
         Slot.MORNING -> MORNING_TARGET

@@ -66,14 +66,16 @@ object VendorKeepAlive {
             e.keywords.any { manufacturer.contains(it) || brand.contains(it) }
         }
         for (entry in ordered) {
+            // 不做 resolveActivity 预检:targetSdk 30+ 的包可见性过滤下,厂商安全中心对本应用
+            // 不可见,预检一律返回 null,整张表都会被跳过(此前自启动引导基本失效)。
+            // 直接启动,找不到或没权限就换下一个。
             try {
-                val intent = Intent().setComponent(entry.component).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                if (context.packageManager.resolveActivity(intent, 0) != null) {
-                    context.startActivity(intent)
-                    return true
-                }
+                context.startActivity(
+                    Intent().setComponent(entry.component).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+                return true
             } catch (_: Exception) {
-                // try next
+                // ActivityNotFoundException / SecurityException:试下一个
             }
         }
         Perms.openAppSettings(context)

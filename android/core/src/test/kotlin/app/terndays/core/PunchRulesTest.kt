@@ -78,4 +78,24 @@ class PunchRulesTest {
         assertEquals(setOf(Slot.EVENING), PunchRules.pendingSlots(12))
         assertEquals(setOf(Slot.EVENING), PunchRules.pendingSlots(23))
     }
+
+    @Test
+    fun `定位失败只重试一次且不越过窗口`() {
+        val d = java.time.LocalDate.parse("2026-09-23")
+        // 首次失败:10 分钟后重试
+        assertEquals(LocalDateTime.parse("2026-09-23T07:15"),
+            PunchRules.retryAt(d, Slot.MORNING, LocalDateTime.parse("2026-09-23T07:05"), isRetry = false))
+        // 重试本身再失败:不再排(此前会一路排到窗口关闭,一天最多约 70 次)
+        assertNull(PunchRules.retryAt(d, Slot.MORNING, LocalDateTime.parse("2026-09-23T07:15"), isRetry = true))
+        // 早点窗口 12:00 关:11:55 失败时 12:05 已越界
+        assertNull(PunchRules.retryAt(d, Slot.MORNING, LocalDateTime.parse("2026-09-23T11:55"), isRetry = false))
+        // 晚点窗口开到当天结束
+        assertEquals(LocalDateTime.parse("2026-09-23T23:45"),
+            PunchRules.retryAt(d, Slot.EVENING, LocalDateTime.parse("2026-09-23T23:35"), isRetry = false))
+        assertNull(PunchRules.retryAt(d, Slot.EVENING, LocalDateTime.parse("2026-09-23T23:55"), isRetry = false))
+        // 23:58 决定的晚点 00:01 才判定失败:按决策日期算窗口已关,不能排到第二天
+        assertNull(PunchRules.retryAt(d, Slot.EVENING, LocalDateTime.parse("2026-09-24T00:01"), isRetry = false))
+        // 首点不重试
+        assertNull(PunchRules.retryAt(d, Slot.EXTRA, LocalDateTime.parse("2026-09-23T15:00"), isRetry = false))
+    }
 }

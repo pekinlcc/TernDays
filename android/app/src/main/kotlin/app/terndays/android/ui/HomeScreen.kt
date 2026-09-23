@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import app.terndays.android.DataBus
+import app.terndays.android.util.Perms
 import app.terndays.android.R
 import app.terndays.android.db.PunchDb
 import app.terndays.android.widget.TernDaysWidgetProvider
@@ -105,13 +106,13 @@ fun HomeScreen(
         Spacer(Modifier.height(14.dp))
 
         val d = data
-        val permsOk = remember(tick) { app.terndays.android.util.Perms.allCoreGranted(context) }
+        val missing = remember(tick) { Perms.missing(context) }
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(14.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
-            if (!permsOk) {
-                item { PermissionWarningCard(onSettings) }
+            missing?.let { m ->
+                item { PermissionWarningCard(m, onSettings) }
             }
             item { SummaryCard(year, d, onYearChange = { year = it }, onSettings) }
             if (year == LocalDate.now().year) {
@@ -183,12 +184,23 @@ fun HomeScreen(
 }
 
 @Composable
-private fun PermissionWarningCard(onSettings: () -> Unit) {
+private fun PermissionWarningCard(missing: Perms.Missing, onSettings: () -> Unit) {
+    val context = LocalContext.current
+    // 按真正缺的那一项说原因,并直接跳到能修好它的地方
+    // (此前一律写「定位权限未设为始终允许」,系统定位关着时把人引到一个全是绿色的权限页)
+    val (text, action) = when (missing) {
+        Perms.Missing.LOCATION_SERVICES ->
+            "系统定位服务已关闭，点击打开" to { Perms.openLocationSettings(context) }
+        Perms.Missing.LOCATION ->
+            "还没有定位权限，点击去授权" to onSettings
+        Perms.Missing.BACKGROUND ->
+            "定位权限未设为「始终允许」，点击去完成设置" to onSettings
+    }
     Row(
         Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(Td.WarmSoft)
-            .clickable(onClick = onSettings)
+            .clickable(onClick = action)
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -196,7 +208,7 @@ private fun PermissionWarningCard(onSettings: () -> Unit) {
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text("自动打卡还没就绪", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Td.WarmDeep)
-            Text("定位权限未设为「始终允许」，点击去完成设置", fontSize = 11.sp, color = Td.WarmDeep)
+            Text(text, fontSize = 11.sp, color = Td.WarmDeep)
         }
         Icon(painterResource(R.drawable.ic_chev_right), null, Modifier.size(14.dp), tint = Td.WarmDeep)
     }

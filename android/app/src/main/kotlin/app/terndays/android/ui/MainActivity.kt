@@ -34,7 +34,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         if (Prefs.onboardingDone(this)) {
             PunchScheduler.scheduleNext(this)
-            PunchService.maybeBackfill(this)
+            PunchService.maybeBackfill(this, fromForeground = true)
             Cities.reResolveHistoryIfNeeded(this) { changed ->
                 runOnUiThread {
                     Toast.makeText(this, "城市库已更新，自动修正了 $changed 条历史记录", Toast.LENGTH_LONG).show()
@@ -60,7 +60,7 @@ private fun AppRoot() {
                 onDone = {
                     Prefs.setOnboardingDone(context)
                     PunchScheduler.scheduleNext(context)
-                    PunchService.maybeBackfill(context)
+                    PunchService.maybeBackfill(context, fromForeground = true)
                     nav.navigate("home") { popUpTo("onboarding") { inclusive = true } }
                 },
             )
