@@ -83,4 +83,6 @@ data class YearStats(
     val days: Map<LocalDate, DayAttribution>,
     /** 「开始使用」之日：早于它的日子既不算漏记，也不该出现在导出的每日明细里 */
     val trackingSince: LocalDate? = null,
+    /** 按自然年统计(computeYearStats)才为 true;自定义区间即使从 1 月 1 日开始也不是「整年」 */
+    val wholeYear: Boolean = false,
 )

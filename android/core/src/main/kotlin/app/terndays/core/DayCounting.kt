@@ -142,9 +142,10 @@ object DayCounting {
         val yearEnd = LocalDate.of(year, 12, 31)
         val last = if (today.isBefore(yearEnd)) today else yearEnd
         if (last.isBefore(first)) {
-            return YearStats(year, first, first, 0.0, emptyList(), emptyList(), emptyMap())
+            return YearStats(year, first, first, 0.0, emptyList(), emptyList(), emptyMap(), wholeYear = true)
         }
-        return computeRangeStats(first, last, today, punches, overrides, nowHour, earliestRecordDate).copy(year = year)
+        return computeRangeStats(first, last, today, punches, overrides, nowHour, earliestRecordDate)
+            .copy(year = year, wholeYear = true)
     }
 
     /**

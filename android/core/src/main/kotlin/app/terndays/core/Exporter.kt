@@ -16,9 +16,12 @@ object Exporter {
 
     private fun punchTime(p: Punch): String = Fmt.clock(p)
 
-    /** 「2026 年」;自定义区间 / 滚动窗口写成「2026-03-29 至 2026-09-24」 */
+    /**
+     * 按年统计写「2026 年」;自定义区间 / 滚动窗口写成「2026-03-29 至 2026-09-24」——
+     * 哪怕区间恰好从 1 月 1 日开始(只导出上半年),也不能标成整年。
+     */
     fun periodLabel(stats: YearStats): String =
-        if (stats.firstDate == LocalDate.of(stats.year, 1, 1) && stats.lastDate.year == stats.year) {
+        if (stats.wholeYear) {
             "${stats.year} 年"
         } else {
             "${stats.firstDate.format(DATE)} 至 ${stats.lastDate.format(DATE)}"

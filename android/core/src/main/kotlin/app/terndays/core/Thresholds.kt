@@ -24,9 +24,12 @@ object Thresholds {
         val remaining: Double get() = (threshold.days - used).coerceAtLeast(0.0)
     }
 
-    /** 剩余 ≤ max(7 天, 阈值的 10%) 算「接近」。 */
+    /**
+     * 剩余 ≤ max(7 天, 阈值的 10%) 算「接近」,但这段余量不超过阈值的一半——
+     * 否则 7 天以内的小阈值刚设好、一天没用就已经「快到上限」。
+     */
     fun status(threshold: Threshold, used: Double): Status {
-        val near = maxOf(7.0, threshold.days * 0.1)
+        val near = minOf(maxOf(7.0, threshold.days * 0.1), threshold.days / 2.0)
         val level = when {
             used >= threshold.days -> Level.REACHED
             threshold.days - used <= near -> Level.NEAR

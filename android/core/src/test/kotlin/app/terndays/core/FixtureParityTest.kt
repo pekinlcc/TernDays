@@ -80,6 +80,17 @@ class FixtureParityTest {
             ),
         ),
         Case(
+            name = "自定义区间从 1 月 1 日开始到年中:导出标题不能写成整年",
+            today = "2026-09-23", nowHour = 10, earliest = "2026-01-01",
+            from = "2026-01-01", to = "2026-01-04",
+            punches = listOf(
+                p("2026-01-01", Slot.MORNING, "CN:上海", "上海", 7),
+                p("2026-01-01", Slot.EVENING, "CN:上海", "上海", 17),
+                p("2026-01-03", Slot.EVENING, "CN:杭州", "杭州", 17, 30),
+            ),
+            overrides = listOf(DayOverride(LocalDate.parse("2026-01-04"), "CN:杭州", "杭州", OverrideScope.MORNING)),
+        ),
+        Case(
             name = "还没有任何记录",
             today = "2026-05-01", nowHour = 12, earliest = null, year = 2026,
             punches = emptyList(),

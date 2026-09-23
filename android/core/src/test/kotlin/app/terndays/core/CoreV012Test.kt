@@ -36,6 +36,15 @@ class CoreV012Test {
         assertEquals("Asia/Tokyo(UTC+9)", Fmt.zoneLabel("Asia/Tokyo", tokyo.epochMs))
         assertEquals("Asia/Kolkata(UTC+5:30)", Fmt.zoneLabel("Asia/Kolkata", tokyo.epochMs))
         assertEquals("Europe/London(UTC)", Fmt.zoneLabel("Europe/London", tokyo.epochMs))
+        // 系统区域是阿拉伯语等时,导出的时刻仍是 ASCII 数字
+        val saved = java.util.Locale.getDefault()
+        try {
+            java.util.Locale.setDefault(java.util.Locale.forLanguageTag("ar-EG"))
+            assertEquals("07:00", Fmt.clock(tokyo))
+            assertEquals("Asia/Kolkata(UTC+5:30)", Fmt.zoneLabel("Asia/Kolkata", tokyo.epochMs))
+        } finally {
+            java.util.Locale.setDefault(saved)
+        }
         // 夏令时按那一刻算
         val july = ZonedDateTime.of(2026, 7, 1, 12, 0, 0, 0, ZoneId.of("UTC")).toInstant().toEpochMilli()
         assertEquals("Europe/London(UTC+1)", Fmt.zoneLabel("Europe/London", july))
@@ -162,7 +171,9 @@ class CoreV012Test {
             earliestRecordDate = LocalDate.parse("2025-12-31"))
         val range = DayCounting.computeRangeStats(LocalDate.parse("2026-01-01"), today, today, punches, overrides,
             nowHour = 9, earliestRecordDate = LocalDate.parse("2025-12-31"))
-        assertEquals(year, range)
+        // 口径完全一致,只差「整年」标记(导出标题用)
+        assertEquals(year, range.copy(wholeYear = true))
+        assertFalse(range.wholeYear)
     }
 
     @Test
@@ -173,6 +184,13 @@ class CoreV012Test {
         assertEquals(mapOf("广州" to 1.0, "上海" to 1.0), cross.cities.associate { it.cityName to it.days })
         assertEquals(listOf(LocalDate.parse("2025-12-31"), LocalDate.parse("2026-01-01")), cross.unrecordedDates)
         assertEquals("2025-12-30 至 2026-01-02", Exporter.periodLabel(cross))
+
+        // 自定义区间恰好从 1 月 1 日开始(只导出上半年):不能标成整年
+        val h1 = DayCounting.computeRangeStats(
+            LocalDate.parse("2025-01-01"), LocalDate.parse("2025-06-30"), today, punches, emptyList(),
+        )
+        assertEquals("2025-01-01 至 2025-06-30", Exporter.periodLabel(h1))
+        assertEquals("2025 年", Exporter.periodLabel(DayCounting.computeYearStats(2025, today, punches, emptyList())))
 
         val (from, to) = Thresholds.range(Thresholds.Window.ROLLING_180, today)
         assertEquals(LocalDate.parse("2025-07-07"), from)
@@ -205,6 +223,11 @@ class CoreV012Test {
         assertEquals(Thresholds.Level.NEAR, Thresholds.status(t, 165.0).level) // 剩 18 ≤ 18.3
         assertEquals(Thresholds.Level.REACHED, Thresholds.status(t, 183.0).level)
         assertEquals(0.0, Thresholds.status(t, 190.0).remaining)
+        // 7 天以内的小阈值:刚设好、一天没用时不能已经「快到上限」
+        val tiny = Thresholds.Threshold("JP", 5)
+        assertEquals(Thresholds.Level.OK, Thresholds.status(tiny, 0.0).level)
+        assertEquals(Thresholds.Level.NEAR, Thresholds.status(tiny, 3.0).level)
+        assertEquals(Thresholds.Level.REACHED, Thresholds.status(tiny, 5.0).level)
         val small = Thresholds.Threshold("JP", 30, Thresholds.Window.ROLLING_180)
         assertEquals(Thresholds.Level.NEAR, Thresholds.status(small, 23.0).level) // 剩 7 天
         val list = listOf(t, small)
