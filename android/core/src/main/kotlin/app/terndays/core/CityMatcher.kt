@@ -98,10 +98,6 @@ class CityMatcher private constructor(
             .map { SearchHit(it.key, nameOf[it.key]!!, regionOf(it.key)) }
     }
 
-    /** 旧签名兼容:等价 search() 去掉 region。 */
-    fun searchByName(query: String, limit: Int = 20): List<Pair<String, String>> =
-        search(query, limit).map { it.cityKey to it.cityName }
-
     companion object {
         private fun isDomestic(key: String) =
             key.startsWith("CN:") || key.startsWith("HK:") || key.startsWith("MO:")
@@ -115,7 +111,10 @@ class CityMatcher private constructor(
             return if (admin1.isEmpty() || admin1 == cc) country else "$country·$admin1"
         }
 
-        /** 常见国家码 → 中文名(仅搜索消歧展示用,未覆盖的显示原码)。 */
+        /** 国家码 → 中文名;未收录的返回原码。 */
+        fun countryName(cc: String): String = CC_NAMES[cc] ?: cc
+
+        /** 常见国家码 → 中文名(搜索消歧与按国家汇总展示用,未覆盖的显示原码)。 */
         private val CC_NAMES = mapOf(
             "SG" to "新加坡", "JP" to "日本", "KR" to "韩国", "TH" to "泰国", "MY" to "马来西亚",
             "ID" to "印尼", "VN" to "越南", "PH" to "菲律宾", "IN" to "印度", "US" to "美国",

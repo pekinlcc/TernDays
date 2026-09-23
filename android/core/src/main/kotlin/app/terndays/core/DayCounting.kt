@@ -144,15 +144,35 @@ object DayCounting {
         if (last.isBefore(first)) {
             return YearStats(year, first, first, 0.0, emptyList(), emptyList(), emptyMap())
         }
+        return computeRangeStats(first, last, today, punches, overrides, nowHour, earliestRecordDate).copy(year = year)
+    }
+
+    /**
+     * 任意区间(含首尾)的统计,口径与 [computeYearStats] 完全相同:自定义区间、「最近 180 天」、
+     * 跨年区间都走这里。结果的 year 取区间末日所在年份(仅作标签)。
+     */
+    fun computeRangeStats(
+        from: LocalDate,
+        to: LocalDate,
+        today: LocalDate,
+        punches: List<Punch>,
+        overrides: List<DayOverride>,
+        nowHour: Int? = null,
+        earliestRecordDate: LocalDate? = null,
+    ): YearStats {
+        require(!to.isBefore(from)) { "区间结束不能早于开始" }
+        val first = from
+        val last = to
+        fun inRange(d: LocalDate) = !d.isBefore(first) && !d.isAfter(last)
 
         val bySlot = HashMap<Pair<LocalDate, Slot>, Punch>()
         for (p in punches) {
-            if (p.localDate.year != year) continue
+            if (!inRange(p.localDate)) continue
             val k = p.localDate to p.slot
             val cur = bySlot[k]
             if (cur == null || p.epochMs < cur.epochMs) bySlot[k] = p
         }
-        val overridesByDate = overrides.filter { it.localDate.year == year }.groupBy { it.localDate }
+        val overridesByDate = overrides.filter { inRange(it.localDate) }.groupBy { it.localDate }
 
         // 「无记录」从全库最早一条记录之日起算(跨年份):安装/开始使用之前的日子不是「漏记」,
         // 不再让新装用户首页一上来就显示「另有 240+ 天无记录」
@@ -207,7 +227,7 @@ object DayCounting {
             .sortedWith(compareByDescending<CityStat> { it.days }.thenBy { it.cityName }.thenBy { it.cityKey })
 
         return YearStats(
-            year, first, last, recorded, cities, unrecorded, days,
+            last.year, first, last, recorded, cities, unrecorded, days,
             trackingSince = firstRecordDate.takeIf { it != LocalDate.MAX },
         )
     }

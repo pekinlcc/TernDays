@@ -15,6 +15,23 @@ enum class WidgetStyle(val id: String) {
     GRADIENT("GRADIENT"),
     ;
 
+    /** 设置页选项名(双端一致) */
+    val label: String
+        get() = when (this) {
+            PLAIN -> "素面"
+            MATERIAL -> "系统材质"
+            GRADIENT -> "品牌渐变"
+        }
+
+    /** Android 设置页的说明(iOS 的材质能力不同,说明在 WidgetStyle.swift 另写) */
+    val androidHint: String
+        get() = when (this) {
+            PLAIN -> "实心底面，和系统自带的小组件同质，放在任何壁纸上都稳。"
+            MATERIAL -> "让壁纸透一点出来。小组件是静态快照，安卓做不出实时模糊，这里是接近的近似；" +
+                "花壁纸上会显脏，那就换回素面。"
+            GRADIENT -> "品牌色竖向渐变、文字全白，一眼认得出，也不挑壁纸。"
+        }
+
     companion object {
         val DEFAULT = PLAIN
 

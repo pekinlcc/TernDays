@@ -1,10 +1,8 @@
 package app.terndays.core
 
 import java.io.ByteArrayOutputStream
-import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
@@ -13,13 +11,18 @@ import java.util.zip.ZipOutputStream
 object Exporter {
 
     private val DATE = DateTimeFormatter.ISO_LOCAL_DATE
-    private val TIME = DateTimeFormatter.ofPattern("HH:mm")
-    private val WEEK = arrayOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 
-    private fun weekday(d: LocalDate) = WEEK[d.dayOfWeek.value - 1]
+    private fun weekday(d: LocalDate) = Fmt.weekdayCn(d)
 
-    private fun punchTime(p: Punch): String =
-        Instant.ofEpochMilli(p.epochMs).atZone(DayCounting.zoneOf(p.zoneId)).toLocalTime().format(TIME)
+    private fun punchTime(p: Punch): String = Fmt.clock(p)
+
+    /** 「2026 年」;自定义区间 / 滚动窗口写成「2026-03-29 至 2026-09-24」 */
+    fun periodLabel(stats: YearStats): String =
+        if (stats.firstDate == LocalDate.of(stats.year, 1, 1) && stats.lastDate.year == stats.year) {
+            "${stats.year} 年"
+        } else {
+            "${stats.firstDate.format(DATE)} 至 ${stats.lastDate.format(DATE)}"
+        }
 
     /** 「手动」只标在确实来自更正的那一份上,不贴到自动判定的另一半天 */
     private fun attributionText(attr: DayAttribution): String = when {
@@ -99,7 +102,7 @@ object Exporter {
 
     private fun dailyTable(stats: YearStats, punches: List<Punch>): List<List<String>> {
         val rows = ArrayList<List<String>>()
-        rows.add(listOf("日期", "星期", "早打卡", "早城市", "晚打卡", "晚城市", "首点", "计入", "备注"))
+        rows.add(listOf("日期", "星期", "早打卡", "早城市", "晚打卡", "晚城市", "首点", "计入", "备注", "时区"))
         val daily = dailyRows(stats, punches)
         if (daily.isEmpty()) {
             rows.add(listOf("尚未开始记录"))
@@ -125,9 +128,23 @@ object Exporter {
                     r.extra?.let { "首 ${punchTime(it)} ${it.cityName}" } ?: "",
                     attributionText(r.attribution),
                     notes.joinToString("；"),
+                    // 出差跨时区时,打卡时刻按当地时间写,这一列说明是哪里的时间
+                    listOfNotNull(r.morning, r.evening, r.extra)
+                        .map { Fmt.zoneLabel(it.zoneId, it.epochMs) }.distinct().joinToString(" / "),
                 ),
             )
         }
+        return rows
+    }
+
+    /** 行程段:同城连续的日子合成一段(见 [Stays])。 */
+    private fun staysTable(stats: YearStats): List<List<String>> {
+        val rows = ArrayList<List<String>>()
+        rows.add(listOf("城市", "开始", "结束", "天数"))
+        for (s in Stays.fold(stats.days)) {
+            rows.add(listOf(s.cityName, s.from.format(DATE), s.to.format(DATE), DayCounting.formatDays(s.days)))
+        }
+        if (rows.size == 1) rows.add(listOf("尚未开始记录"))
         return rows
     }
 
@@ -145,10 +162,13 @@ object Exporter {
         includeSummary: Boolean,
         includeDaily: Boolean,
         exportedAt: LocalDateTime? = null,
+        includeStays: Boolean = false,
     ): String {
         val parts = ArrayList<String>()
-        if (includeSummary) parts.add("# 城市汇总 · ${stats.year} 年\r\n" + csv(summaryTable(stats, exportedAt)))
-        if (includeDaily) parts.add("# 每日明细 · ${stats.year} 年\r\n" + csv(dailyTable(stats, punches)))
+        val period = periodLabel(stats)
+        if (includeSummary) parts.add("# 城市汇总 · $period\r\n" + csv(summaryTable(stats, exportedAt)))
+        if (includeDaily) parts.add("# 每日明细 · $period\r\n" + csv(dailyTable(stats, punches)))
+        if (includeStays) parts.add("# 行程段 · $period\r\n" + csv(staysTable(stats)))
         return "\uFEFF" + parts.joinToString("\r\n\r\n")
     }
 
@@ -204,10 +224,12 @@ object Exporter {
         includeSummary: Boolean,
         includeDaily: Boolean,
         exportedAt: LocalDateTime? = null,
+        includeStays: Boolean = false,
     ): ByteArray {
         val sheets = ArrayList<Pair<String, List<List<String>>>>()
         if (includeSummary) sheets.add("城市汇总" to summaryTable(stats, exportedAt))
         if (includeDaily) sheets.add("每日明细" to dailyTable(stats, punches))
+        if (includeStays) sheets.add("行程段" to staysTable(stats))
         if (sheets.isEmpty()) sheets.add("城市汇总" to summaryTable(stats, exportedAt))
 
         val contentTypes = buildString {

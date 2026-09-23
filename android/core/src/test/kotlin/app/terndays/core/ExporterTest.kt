@@ -73,7 +73,7 @@ class ExporterTest {
         assertTrue(Exporter.dailyRows(empty, emptyList()).isEmpty())
         val csv = Exporter.exportCsv(empty, emptyList(), includeSummary = true, includeDaily = true)
         assertTrue(csv.contains("开始记录日,尚未开始记录"))
-        assertTrue(csv.endsWith("日期,星期,早打卡,早城市,晚打卡,晚城市,首点,计入,备注\r\n尚未开始记录"))
+        assertTrue(csv.endsWith("日期,星期,早打卡,早城市,晚打卡,晚城市,首点,计入,备注,时区\r\n尚未开始记录"))
         assertTrue(!csv.contains("无记录,"))
     }
 

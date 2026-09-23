@@ -47,10 +47,10 @@ class CityMatcherTest {
 
     @Test
     fun `按名称搜索去重`() {
-        val results = matcher.searchByName("州")
+        val results = matcher.search("州").map { it.cityKey to it.cityName }
         assertEquals(listOf("CN:杭州" to "杭州", "CN:湖州" to "湖州"), results)
-        assertTrue(matcher.searchByName("").isEmpty())
-        assertEquals(listOf("JP:40:Tokyo" to "东京"), matcher.searchByName("tokyo"))
+        assertTrue(matcher.search("").isEmpty())
+        assertEquals(listOf("JP:40:Tokyo" to "东京"), matcher.search("tokyo").map { it.cityKey to it.cityName })
     }
 
     @Test
