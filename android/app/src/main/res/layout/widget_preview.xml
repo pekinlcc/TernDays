@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  仅用于小组件选择器的预览:与真实布局同一套字号/间距,但填示例数据。
-  真实布局的文本是运行时填的,直接拿来做 previewLayout 会是一块空白。
+  本文件由 tools/gen_widget_layouts.py 生成,请勿手改(CI 会检查)。
+  2×2 小组件 · 素面 · 选择器预览(示例数据)
+  年份眉题 + Top 3 城市三行等权重(城市名 15 / 天数 19 / 单位 11);行间与末尾的弹性间距平分余量。
+  预览:与真实布局同一层级,填示例数据,供小组件选择器展示。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
@@ -20,10 +22,15 @@
         android:textSize="12sp"
         android:textColor="@color/widgetAccent" />
 
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:minHeight="8dp" />
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="9dp"
         android:orientation="horizontal"
         android:baselineAligned="true">
         <TextView
@@ -31,6 +38,7 @@
             android:layout_weight="1"
             android:layout_height="wrap_content"
             android:maxLines="1"
+            android:ellipsize="end"
             android:includeFontPadding="false"
             android:fontFamily="sans-serif-medium"
             android:text="@string/widget_preview_city_1"
@@ -40,8 +48,10 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
+            android:maxLines="1"
             android:includeFontPadding="false"
             android:fontFamily="sans-serif-medium"
+            android:fontFeatureSettings="tnum"
             android:text="@string/widget_preview_days_1"
             android:textSize="19sp"
             android:textColor="@color/widgetPrimary" />
@@ -49,16 +59,22 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="2dp"
+            android:maxLines="1"
             android:includeFontPadding="false"
             android:text="@string/widget_unit_day"
             android:textSize="11sp"
             android:textColor="@color/widgetSecondary" />
     </LinearLayout>
 
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:minHeight="6dp" />
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
         android:orientation="horizontal"
         android:baselineAligned="true">
         <TextView
@@ -66,6 +82,7 @@
             android:layout_weight="1"
             android:layout_height="wrap_content"
             android:maxLines="1"
+            android:ellipsize="end"
             android:includeFontPadding="false"
             android:fontFamily="sans-serif-medium"
             android:text="@string/widget_preview_city_2"
@@ -75,8 +92,10 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
+            android:maxLines="1"
             android:includeFontPadding="false"
             android:fontFamily="sans-serif-medium"
+            android:fontFeatureSettings="tnum"
             android:text="@string/widget_preview_days_2"
             android:textSize="19sp"
             android:textColor="@color/widgetPrimary" />
@@ -84,16 +103,22 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="2dp"
+            android:maxLines="1"
             android:includeFontPadding="false"
             android:text="@string/widget_unit_day"
             android:textSize="11sp"
             android:textColor="@color/widgetSecondary" />
     </LinearLayout>
 
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:minHeight="6dp" />
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
         android:orientation="horizontal"
         android:baselineAligned="true">
         <TextView
@@ -101,6 +126,7 @@
             android:layout_weight="1"
             android:layout_height="wrap_content"
             android:maxLines="1"
+            android:ellipsize="end"
             android:includeFontPadding="false"
             android:fontFamily="sans-serif-medium"
             android:text="@string/widget_preview_city_3"
@@ -110,8 +136,10 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
+            android:maxLines="1"
             android:includeFontPadding="false"
             android:fontFamily="sans-serif-medium"
+            android:fontFeatureSettings="tnum"
             android:text="@string/widget_preview_days_3"
             android:textSize="19sp"
             android:textColor="@color/widgetPrimary" />
@@ -119,6 +147,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="2dp"
+            android:maxLines="1"
             android:includeFontPadding="false"
             android:text="@string/widget_unit_day"
             android:textSize="11sp"

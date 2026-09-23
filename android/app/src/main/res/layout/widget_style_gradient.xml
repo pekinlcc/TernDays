@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
+  本文件由 tools/gen_widget_layouts.py 生成,请勿手改(CI 会检查)。
   2×2 小组件 · 品牌渐变
-  三种外观共用同一套信息层级(年份眉题 + Top 3 城市三行等权重,城市名 15 / 天数 19 / 单位 11),
-  只换底面与文字配色。**这三个布局由同一份模板生成,改层级请三个一起改。**
-  底面:品牌色竖向渐变,文字全白(深浅模式各一组色标)。
+  年份眉题 + Top 3 城市三行等权重(城市名 15 / 天数 19 / 单位 11);行间与末尾的弹性间距平分余量。
+  底面:品牌色竖向渐变,文字白色三级(深浅模式各一组色标)。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root"
@@ -175,7 +175,6 @@
             android:textSize="11sp"
             android:textColor="@color/widgetOnBrandFaint" />
     </LinearLayout>
-
 
     <FrameLayout
         android:layout_width="match_parent"

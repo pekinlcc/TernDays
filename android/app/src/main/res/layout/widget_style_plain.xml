@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
+  本文件由 tools/gen_widget_layouts.py 生成,请勿手改(CI 会检查)。
   2×2 小组件 · 素面
-  三种外观共用同一套信息层级(年份眉题 + Top 3 城市三行等权重,城市名 15 / 天数 19 / 单位 11),
-  只换底面与文字配色。**这三个布局由同一份模板生成,改层级请三个一起改。**
+  年份眉题 + Top 3 城市三行等权重(城市名 15 / 天数 19 / 单位 11);行间与末尾的弹性间距平分余量。
   底面:白 / #1C1C1E 实心;唯一品牌色在年份上。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -175,7 +175,6 @@
             android:textSize="11sp"
             android:textColor="@color/widgetSecondary" />
     </LinearLayout>
-
 
     <FrameLayout
         android:layout_width="match_parent"
