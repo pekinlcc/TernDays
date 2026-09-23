@@ -20,6 +20,11 @@ final class MigrateSendServer {
     }
 
     private func startLocked() {
+        // 数据还锁着(读不出来)时导出的是空库:新手机会以为「迁移成功,0 条」
+        guard DataStore.shared.reloadIfSealed() else {
+            emitError("数据暂时读不到:请先解锁手机、在旧手机上打开一次 TernDays,再重新开始迁移。")
+            return
+        }
         do {
             let json = try MigrationCodec.toJson(
                 datasetVersion: Cities.datasetVersion,
@@ -247,12 +252,20 @@ enum MigrateImportClient {
                 guard len > 0, len <= MigrationLink.maxBlobBytes else { fail("收到的数据长度异常,已中止"); return }
                 receiveExactly(conn, total: len, buffer: Data()) { blob in
                     guard let blob else { fail("传输中断,请重新扫码再试。"); return }
+                    let payload: MigrationPayload
                     do {
-                        let payload = try MigrationCodec.parse(
+                        payload = try MigrationCodec.parse(
                             try MigrationCrypto.open(key: link.key, blob: blob)
                         )
-                        DispatchQueue.main.async { onStatus("正在合并导入…") }
-                        let result = DataStore.shared.mergeImported(
+                    } catch {
+                        fail(error.localizedDescription); return
+                    }
+                    // 从这里起占住结束权:超时不能在合并落盘之后再报「失败」
+                    guard finished.compareAndSet(expected: false, to: true) else { return }
+                    DispatchQueue.main.async { onStatus("正在合并导入…") }
+                    do {
+                        // 写盘失败会整体回滚并抛错:此时不发 TERNDONE,旧手机不会误以为已迁移完成
+                        let result = try DataStore.shared.mergeImported(
                             punches: payload.punches, overrides: payload.overrides
                         )
                         var done = MigrationLink.magicDone
@@ -272,10 +285,11 @@ enum MigrateImportClient {
                                 NotificationCenter.default.post(name: .terndaysDataChanged, object: nil)
                             }
                         }
-                        guard finished.compareAndSet(expected: false, to: true) else { return }
                         DispatchQueue.main.async { onDone(Outcome(result: result, remapped: remapped)) }
                     } catch {
-                        fail(error.localizedDescription)
+                        conn.cancel()
+                        let msg = error.localizedDescription
+                        DispatchQueue.main.async { onError(msg) }
                     }
                 }
             }

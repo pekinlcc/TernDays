@@ -64,6 +64,8 @@ struct TernEntry: TimelineEntry {
     let date: Date
     let yearLabel: String
     let top: [TopCity]
+    /// 数据暂时读不到(重启后首次解锁前):显示「解锁后显示」,而不是误导性的「还没有打卡记录」
+    var unavailable = false
 }
 
 /// 只展示最关键的信息:今年 Top 3 城市及天数(三行等权重)。
@@ -87,8 +89,14 @@ struct TernProvider: TimelineProvider {
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<TernEntry>) -> Void) {
         let now = Date()
+        let first = load(at: now)
+        if first.unavailable {
+            // 数据被锁在数据保护里:15 分钟后再试,解锁后主应用也会主动刷新
+            completion(Timeline(entries: [first], policy: .after(now.addingTimeInterval(15 * 60))))
+            return
+        }
         let nextPunch = PunchRules.nextPunchDate().addingTimeInterval(30 * 60)
-        var entries = [load(at: now)]
+        var entries = [first]
         // v0.9 起天数会在零点自己变化(昨天的半天补满 1 天、元旦换年):
         // 只按打卡时点刷新的话,凌晨到早上 7 点半会一直显示旧数字
         if let midnight = Self.nextMidnight(after: now), midnight < nextPunch {
@@ -110,6 +118,9 @@ struct TernProvider: TimelineProvider {
         // 小组件进程可能被系统复用:每次生成时间线前重读磁盘,避免展示主应用早已更新过的旧数据
         DataStore.shared.reloadFromDisk()
         let day = LocalDate(from: when, in: .current)
+        if DataStore.shared.isSealed {
+            return TernEntry(date: when, yearLabel: "\(String(day.year)) 年", top: [], unavailable: true)
+        }
         let stats = DayCounting.computeYearStats(
             year: day.year,
             today: day,
@@ -184,7 +195,7 @@ struct TernDaysWidgetView: View {
                 .lineLimit(1)
 
             if entry.top.isEmpty {
-                Text("还没有打卡记录")
+                Text(entry.unavailable ? "解锁手机后显示" : "还没有打卡记录")
                     .font(.system(size: 13))
                     .foregroundStyle(palette.secondary)
                     .padding(.top, 8)

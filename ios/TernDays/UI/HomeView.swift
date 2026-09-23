@@ -12,15 +12,16 @@ struct HomeView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 14) {
-                if punch.authStatus != .authorizedAlways {
-                    NavigationLink(value: "settings") {
+                if let issue = punch.locationIssue {
+                    // 就地修:没问过就直接弹系统授权,问过了才跳系统设置(不再先绕一圈应用设置页)
+                    Button { punch.fixLocationPermission() } label: {
                         HStack(spacing: 10) {
                             Image(systemName: "exclamationmark.triangle")
                                 .font(.system(size: 15)).foregroundColor(Td.warmDeep)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("自动打卡还没就绪")
                                     .font(.system(size: 13, weight: .semibold)).foregroundColor(Td.warmDeep)
-                                Text("定位权限未设为「始终允许」，点击去完成设置")
+                                Text(issue)
                                     .font(.system(size: 11)).foregroundColor(Td.warmDeep)
                             }
                             Spacer()

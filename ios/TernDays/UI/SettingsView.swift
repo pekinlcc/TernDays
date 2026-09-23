@@ -51,7 +51,7 @@ struct SettingsView: View {
                             "定位权限「始终允许」",
                             "允许系统在移动时唤醒应用记录城市",
                             ok: punch.authStatus == .authorizedAlways
-                        ) { openSystemSettings() }
+                        ) { punch.fixLocationPermission() }
                         Divider().overlay(Td.divider)
                         permRow("通知权限", "07:00 / 17:00 提醒打卡", ok: notifGranted) {
                             openSystemSettings()

@@ -9,7 +9,8 @@ struct OnboardingView: View {
     @ObservedObject private var punch = PunchManager.shared
     @State private var notifAsked = false
     // 「始终允许」的系统升级弹窗一辈子只出现一次:请求过之后按钮改跳系统设置,不做死按钮
-    @State private var alwaysAsked = false
+    // 与 PunchManager 共用同一个键:系统只弹一次「始终允许」,之后只能去设置里改
+    @AppStorage("askedAlwaysLocation") private var alwaysAsked = false
 
     private enum Step {
         case whenInUse, always, notify, done
@@ -125,8 +126,7 @@ struct OnboardingView: View {
                     UIApplication.shared.open(url)
                 }
             } else {
-                alwaysAsked = true
-                punch.requestAlways()
+                punch.requestAlways() // 内部会记下「已请求过」
             }
         case .notify:
             UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in
