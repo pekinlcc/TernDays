@@ -173,7 +173,11 @@ fun HomeScreen(
                         title = "最近 $recentGaps 天没有自动记录",
                         text = "可能被系统限制了后台运行，检查一下打卡保障；漏掉的日子可以补记",
                         critical = true,
-                        actions = listOf("检查打卡保障" to onSettings, "去补记" to { onBackfill(year) }),
+                        // 漏记总是最近几天的事:补记要打开最近这段所在的年份,而不是首页正在看的往年(与 iOS 一致)
+                        actions = listOf(
+                            "检查打卡保障" to onSettings,
+                            "去补记" to { onBackfill(LocalDate.now().minusDays(1).year) },
+                        ),
                     )
                 }
                 issue != null -> item { IssueCard(issue, onSettings) }

@@ -15,6 +15,9 @@
 - 可访问性:48dp 触摸目标、标题居中、深色对比、状态保存;小组件外观迷你预览、城市名自动缩字
 - :core 新增 Backfill / Anchors / Stays / Regions / Thresholds / Backup / computeRangeStats / Fmt;
   重放缓存;fixtures/core-cases.json 双端对齐(iOS 在 CI 上比对);测试 88 → 105
+- 发布前多路复查 + 逐条复核,修正约 22 处:撤销 / 区间补记被取消、立即打卡在窗口外无反应、
+  几年的区间补记在 Android 8–11 崩溃、iOS「已达上限」提醒被吞、元旦后「连续第 N 天」清零、
+  区间导出标题冒充整年、导出时刻随系统区域变成本地数字等
 
 ## v0.11.4 · 2026-09-23
 
