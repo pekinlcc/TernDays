@@ -228,4 +228,6 @@ struct YearStats {
     let days: [LocalDate: DayAttribution]
     /// 「开始使用」之日：早于它的日子既不算漏记，也不出现在导出的每日明细里
     var trackingSince: LocalDate? = nil
+    /// 按自然年统计(computeYearStats)才为 true;自定义区间即使从 1 月 1 日开始也不是「整年」
+    var wholeYear: Bool = false
 }

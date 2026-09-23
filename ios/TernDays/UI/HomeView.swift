@@ -16,7 +16,8 @@ struct HomeView: View {
     @State private var data: YearData?
     @State private var extras: HomeExtras?
     @State private var correcting: CorrectTarget?
-    @State private var notifGranted: Bool?
+    /// 通知权限被用户关掉了(没问过不算:引导和每日提醒会去问)
+    @State private var notifDenied = false
     @State private var confirmDeleteFuture = false
     @ObservedObject private var punch = PunchManager.shared
 
@@ -102,8 +103,8 @@ struct HomeView: View {
             }
         }
         UNUserNotificationCenter.current().getNotificationSettings { s in
-            let ok = s.authorizationStatus == .authorized || s.authorizationStatus == .provisional
-            DispatchQueue.main.async { notifGranted = ok }
+            let denied = s.authorizationStatus == .denied
+            DispatchQueue.main.async { notifDenied = denied }
         }
     }
 
@@ -114,19 +115,26 @@ struct HomeView: View {
         ToastCenter.shared.show("已删除 \(n) 条记录")
     }
 
-    // MARK: 状态卡(暂停 > 近几天漏记诊断 > 打卡保障的第一项未满足)
+    // MARK: 状态卡(与 Android 同一优先级:暂停 > 定位没就绪 > 近几天漏记诊断 > 次级项:通知 / 后台 App 刷新)
 
     /// 打卡保障按优先级只报第一项:定位「始终允许」→ 通知 → 后台 App 刷新
     private enum SetupIssue {
         case location(String)
         case notifications
         case backgroundRefresh
+
+        /// 定位没就绪是关键项:自动打卡根本跑不起来,也是近几天漏记最常见的原因,
+        /// 所以排在漏记诊断之前、用暖色;通知、后台刷新是次级项,用弱一级的样式
+        var critical: Bool {
+            if case .location = self { return true }
+            return false
+        }
     }
 
     private var setupIssue: SetupIssue? {
         if let issue = punch.locationIssue { return .location(issue) }
-        // 用户自己关了每日提醒就不再催通知权限
-        if AppPrefs.remindersOn && notifGranted == false { return .notifications }
+        // 通知权限不只管每日提醒:天数提醒、打卡失败提示也靠它,关了就提示(不看每日提醒开没开)
+        if notifDenied { return .notifications }
         if UIApplication.shared.backgroundRefreshStatus != .available { return .backgroundRefresh }
         return nil
     }
@@ -142,6 +150,9 @@ struct HomeView: View {
                 }
                 .buttonStyle(.plain)
             }
+        } else if let issue = setupIssue, issue.critical {
+            // 「始终允许」被收回时先给一键修复,而不是笼统的漏记卡
+            setupIssueCard(issue)
         } else if let gap = extras?.recentGap, gap > 0 {
             NoticeCard(icon: "exclamationmark.triangle", title: "最近 \(gap) 天没有自动记录,可能被系统限制了后台", detail: nil) {
                 NavigationLink(value: SettingsRoute(year: nil)) {
@@ -163,36 +174,43 @@ struct HomeView: View {
         switch issue {
         case .location(let text):
             // 就地修:没问过就直接弹系统授权,问过了才跳系统设置(不再先绕一圈应用设置页)
-            issueButton(title: "自动打卡还没就绪", detail: text) { punch.fixLocationPermission() }
+            issueButton(title: "自动打卡还没就绪", detail: text, critical: true) { punch.fixLocationPermission() }
         case .notifications:
-            issueButton(title: "通知权限没有打开", detail: "07:00 / 17:00 的提醒和打卡失败提示都发不出来，点击去系统设置打开") {
+            issueButton(title: "通知权限没有打开", detail: "打卡提醒、打卡失败提示和天数提醒都发不出来，点击去系统设置打开",
+                        critical: false) {
                 openSystemSettings()
             }
         case .backgroundRefresh:
-            issueButton(title: "后台 App 刷新已关闭", detail: "系统不会在后台唤醒 TernDays 补打，点击去系统设置打开") {
+            issueButton(title: "后台 App 刷新已关闭", detail: "系统不会在后台唤醒 TernDays 补打，点击去系统设置打开",
+                        critical: false) {
                 openSystemSettings()
             }
         }
     }
 
-    private func issueButton(title: String, detail: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+    /// 关键项暖色;次级项弱一级:中性底、正文 / 次要文字色(与 Android IssueCard 一致)
+    private func issueButton(title: String, detail: String, critical: Bool,
+                             action: @escaping () -> Void) -> some View {
+        let bg = critical ? Td.warmSoft : Td.neutralSoft
+        let titleColor = critical ? Td.warmDeep : Td.ink
+        let fg = critical ? Td.warmDeep : Td.muted
+        return Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 15)).foregroundColor(Td.warmDeep)
+                    .font(.system(size: 15)).foregroundColor(fg)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.system(size: 13, weight: .semibold)).foregroundColor(Td.warmDeep)
+                        .font(.system(size: 13, weight: .semibold)).foregroundColor(titleColor)
                     Text(detail)
-                        .font(.system(size: 11)).foregroundColor(Td.warmDeep)
+                        .font(.system(size: 11)).foregroundColor(fg)
                         .multilineTextAlignment(.leading)
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 12)).foregroundColor(Td.warmDeep)
+                    .font(.system(size: 12)).foregroundColor(fg)
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
-            .background(RoundedRectangle(cornerRadius: 14).fill(Td.warmSoft))
+            .background(RoundedRectangle(cornerRadius: 14).fill(bg))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

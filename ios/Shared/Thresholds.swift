@@ -40,10 +40,11 @@ enum Thresholds {
         var remaining: Double { max(Double(threshold.days) - used, 0) }
     }
 
-    /// 剩余 ≤ max(7 天, 阈值的 10%) 算「接近」。
+    /// 剩余 ≤ max(7 天, 阈值的 10%) 算「接近」,但这段余量不超过阈值的一半——
+    /// 否则 7 天以内的小阈值刚设好、一天没用就已经「快到上限」(与 Android :core 同一口径)。
     static func status(_ threshold: Threshold, used: Double) -> Status {
         let limit = Double(threshold.days)
-        let near = max(7.0, limit * 0.1)
+        let near = min(max(7.0, limit * 0.1), limit / 2.0)
         let level: Level
         if used >= limit {
             level = .reached

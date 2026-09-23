@@ -24,6 +24,11 @@ struct BackfillSheet: View {
     @State private var info = SelectionInfo()
     /// 补了比开始记录日更早的日子:说明一句为什么「可补记」的天数变多了
     @State private var sinceNote: String?
+    /// 说明的参照:这次打开后第一次把开始记录日提前之前的那个日期(之前一条记录都没有时是 9999-12-31)。
+    /// 撤销后开始记录日不再早于它,说明就不成立了
+    @State private var sinceBaseline: LocalDate?
+    /// 这次打开后从「还没有记录的日子」里补掉的日子:撤销后又空了就放回去
+    @State private var taken: [LocalDate] = []
     @State private var planError: String?
 
     /// 选中日期(区间)的现状与候选城市
@@ -108,6 +113,11 @@ struct BackfillSheet: View {
             .onChange(of: day) { _ in refresh() }
             .onChange(of: start) { _ in refresh() }
             .onChange(of: end) { _ in refresh() }
+            // 单日补完不关页,toast 里的「撤销」就在这一页上点:数据一变,现状、待补列表、说明都要跟上
+            .onReceive(NotificationCenter.default.publisher(for: .terndaysDataChanged)) { _ in
+                refresh()
+                resync()
+            }
         }
         .toastHost()
     }
@@ -222,17 +232,56 @@ struct BackfillSheet: View {
             return
         }
         let before = DataStore.shared.earliestRecordDate()
+        // 与 Android 同一判断:之前一条记录都没有时,补上的这天同样成为开始记录日
+        let earlier = before.map { r.from < $0 } ?? true
         let label = r.from == r.to ? Fmt.monthDay(r.from) : "\(Fmt.monthDay(r.from)) – \(Fmt.monthDay(r.to))"
-        Corrections.setMany(plan, toast: "已补记 \(label) · \(name)")
+        // 区间补完就收起,页上的说明看不到:开始记录日前移只能写进 toast
+        let note = (mode == .range && earlier) ? "；开始记录日提前到 \(Fmt.monthDay(r.from))" : ""
+        taken.append(contentsOf: pending.filter { $0 >= r.from && $0 <= r.to })
+        Corrections.setMany(plan, toast: "已补记 \(label) · \(name)" + note)
         pending.removeAll { $0 >= r.from && $0 <= r.to }
-        if let before, r.from < before {
-            sinceNote = "开始记录日提前到 \(Fmt.monthDay(r.from, relativeTo: LocalDate.today())),"
-                + "之后没有记录的日子会算作可补记"
+        if earlier {
+            if sinceBaseline == nil { sinceBaseline = before ?? LocalDate(year: 9999, month: 12, day: 31) }
+            sinceNote = sinceText(r.from)
         }
         if mode == .range {
             dismiss()
         } else {
             refresh()
+        }
+    }
+
+    private func sinceText(_ d: LocalDate) -> String {
+        "开始记录日提前到 \(Fmt.monthDay(d, relativeTo: LocalDate.today())),之后没有记录的日子会算作可补记"
+    }
+
+    /// 数据变了(典型:在这一页点了「撤销」):补掉的日子又空了就放回待补列表;
+    /// 开始记录日不再早于补记前,收起那句说明(仍提前时按现在的开始记录日重写)
+    private func resync() {
+        if let lo = taken.min(), let top = taken.max() {
+            let today = LocalDate.today()
+            let hi = min(top, today)
+            if lo <= hi {
+                let stats = DayCounting.computeRangeStats(
+                    from: lo, to: hi, today: today,
+                    punches: DataStore.shared.punchesBetween(lo, hi),
+                    overrides: DataStore.shared.overridesBetween(lo, hi),
+                    nowHour: Calendar.current.component(.hour, from: Date())
+                )
+                let back = Set(taken.filter { $0 <= hi && (stats.days[$0]?.shares.isEmpty ?? false) })
+                if !back.isEmpty {
+                    taken.removeAll { back.contains($0) }
+                    pending = Array(Set(pending).union(back)).sorted(by: >)
+                }
+            }
+        }
+        if let base = sinceBaseline {
+            if let e = DataStore.shared.earliestRecordDate(), e < base {
+                sinceNote = sinceText(e)
+            } else {
+                sinceNote = nil
+                sinceBaseline = nil
+            }
         }
     }
 }

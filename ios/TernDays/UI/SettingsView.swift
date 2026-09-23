@@ -120,7 +120,14 @@ struct SettingsView: View {
     }
 
     private func reload() {
-        data = YearData.load(year: year)
+        var d = YearData.load(year: year)
+        // 看的那一年已经没有数据(清除全部数据、或往年唯一的补记被恢复自动):年份条只剩一项会整条隐藏,
+        // 页面就回不到今年了。退回今年(yearsWithData 总含今年,多读一次即可)
+        if !d.years.contains(year) {
+            year = LocalDate.today().year
+            d = YearData.load(year: year)
+        }
+        data = d
         UNUserNotificationCenter.current().getNotificationSettings { s in
             let ok = s.authorizationStatus == .authorized || s.authorizationStatus == .provisional
             DispatchQueue.main.async { notifGranted = ok }

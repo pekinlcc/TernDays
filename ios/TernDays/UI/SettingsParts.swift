@@ -121,7 +121,7 @@ struct ThresholdSettingsSection: View {
             SettingsHeader(title: "天数提醒")
             TdCard {
                 VStack(spacing: 0) {
-                    Text("某个国家/地区的天数接近或达到上限时发通知提醒(如中国大陆 183 天)。同一上限每个统计期只提醒一次。")
+                    Text("某个国家/地区的天数接近或达到上限时发通知提醒(如中国大陆 183 天)。快到上限和达到上限各提醒一次。")
                         .font(.system(size: 12)).foregroundColor(Td.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)

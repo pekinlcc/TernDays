@@ -291,6 +291,11 @@ func runUnitChecks() {
     expectEqual(w, "threshold remaining", actual: Thresholds.status(t, used: 190).remaining, expected: 0)
     let small = Thresholds.Threshold(regionCode: "JP", days: 30, window: .rolling180)
     expectEqual(w, "threshold small near", actual: Thresholds.status(small, used: 23).level == .near, expected: true)
+    // 7 天以内的小阈值:刚设好、一天没用时不能已经「快到上限」
+    let tiny = Thresholds.Threshold(regionCode: "JP", days: 5)
+    expectEqual(w, "threshold tiny ok", actual: Thresholds.status(tiny, used: 0).level == .ok, expected: true)
+    expectEqual(w, "threshold tiny near", actual: Thresholds.status(tiny, used: 3).level == .near, expected: true)
+    expectEqual(w, "threshold tiny reached", actual: Thresholds.status(tiny, used: 5).level == .reached, expected: true)
     expectEqual(w, "threshold roundtrip", actual: Thresholds.decode(Thresholds.encode([t, small])), expected: [t, small])
     expectEqual(w, "threshold decode bad", actual: Thresholds.decode("CN:183:YEAR;bad;JP:0:YEAR;HK:30:WEEK;:5:YEAR"), expected: [t])
     expectEqual(w, "threshold decode nil", actual: Thresholds.decode(nil).isEmpty, expected: true)
@@ -298,6 +303,15 @@ func runUnitChecks() {
     expectEqual(w, "threshold key rolling", actual: small.notifyKey(today: LocalDate(year: 2026, month: 3, day: 1)), expected: "JP|30|ROLLING_180|2026-3")
     let rolling = Thresholds.range(.rolling180, today: d0)
     expectEqual(w, "rolling range", actual: "\(rolling.from)..\(rolling.to)", expected: "2025-07-07..2026-01-02")
+
+    // 导出标题:只有按年统计写「2025 年」;1 月 1 日起到年中的自定义区间写成起止日期
+    let labelToday = LocalDate(year: 2026, month: 9, day: 23)
+    let h1 = DayCounting.computeRangeStats(from: LocalDate(year: 2025, month: 1, day: 1), to: LocalDate(year: 2025, month: 6, day: 30),
+                                           today: labelToday, punches: [], overrides: [])
+    expectEqual(w, "periodLabel h1", actual: Exporter.periodLabel(h1), expected: "2025-01-01 至 2025-06-30")
+    let y2025 = DayCounting.computeYearStats(year: 2025, today: labelToday, punches: [], overrides: [])
+    expectEqual(w, "periodLabel year", actual: Exporter.periodLabel(y2025), expected: "2025 年")
+    expectEqual(w, "wholeYear range", actual: h1.wholeYear, expected: false)
 
     // Regions 名称
     expectEqual(w, "region names", actual: ["CN", "HK", "JP", "XX"].map { Regions.nameOf($0) }, expected: ["中国大陆", "中国香港", "日本", "XX"])

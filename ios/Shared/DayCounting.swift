@@ -115,14 +115,14 @@ enum DayCounting {
         let last = min(today, yearEnd)
         if last < first {
             return YearStats(year: year, firstDate: first, lastDate: first, recordedDays: 0,
-                             cities: [], unrecordedDates: [], days: [:])
+                             cities: [], unrecordedDates: [], days: [:], wholeYear: true)
         }
         let r = computeRangeStats(from: first, to: last, today: today, punches: punches, overrides: overrides,
                                   nowHour: nowHour, earliestRecordDate: earliestRecordDate)
-        // 区间统计的 year 取末日所在年份;年度统计明确写成这一年
+        // 区间统计的 year 取末日所在年份;年度统计明确写成这一年,并标成「整年」(导出标题用)
         return YearStats(year: year, firstDate: r.firstDate, lastDate: r.lastDate, recordedDays: r.recordedDays,
                          cities: r.cities, unrecordedDates: r.unrecordedDates, days: r.days,
-                         trackingSince: r.trackingSince)
+                         trackingSince: r.trackingSince, wholeYear: true)
     }
 
     /// 任意区间(含首尾)的统计,口径与 computeYearStats 完全相同:自定义区间、「最近 180 天」、

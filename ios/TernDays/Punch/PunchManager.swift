@@ -276,7 +276,7 @@ final class PunchManager: NSObject, ObservableObject, CLLocationManagerDelegate 
             let saved = recordSync(decision, location: location, fromCache: fromCache)
             if let city = saved {
                 noteAttempt(.recorded, slot: decision.slot, detail: city)
-                // 天数变了:看看有没有阈值接近 / 达到(同一窗口期只提醒一次)
+                // 天数变了:看看有没有阈值接近 / 达到(同一窗口期「接近」「达到」各提醒一次)
                 ThresholdAlerts.checkAndNotify()
             }
             DispatchQueue.main.async {

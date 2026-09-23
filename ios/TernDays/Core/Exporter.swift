@@ -32,9 +32,10 @@ enum Exporter {
         }
     }
 
-    /// 「2026 年」;自定义区间 / 滚动窗口写成「2026-03-29 至 2026-09-24」(与 Android 逐字一致)
+    /// 按年统计写「2026 年」;自定义区间 / 滚动窗口写成「2026-03-29 至 2026-09-24」(与 Android 逐字一致)——
+    /// 哪怕区间恰好从 1 月 1 日开始(只导出上半年),也不能标成整年。
     static func periodLabel(_ stats: YearStats) -> String {
-        if stats.firstDate == LocalDate(year: stats.year, month: 1, day: 1) && stats.lastDate.year == stats.year {
+        if stats.wholeYear {
             return "\(stats.year) 年"
         }
         return "\(stats.firstDate) 至 \(stats.lastDate)"

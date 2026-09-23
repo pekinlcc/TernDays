@@ -23,7 +23,7 @@ enum ThresholdStore {
         save(load().filter { $0 != t })
     }
 
-    /// 已经提醒过的 notifyKey(同一窗口期只提醒一次)
+    /// 已经提醒过的键(notifyKey + 级别:同一窗口期里「接近」「达到」各提醒一次)
     static func notifiedKeys() -> Set<String> {
         Set(AppPrefs.store.stringArray(forKey: AppPrefs.thresholdNotifiedKey) ?? [])
     }
@@ -43,7 +43,7 @@ enum ThresholdStore {
 }
 
 /// 阈值用量计算与提醒:打卡成功后、回到前台时各查一次。
-/// 接近(NEAR)或达到(REACHED)且本窗口期还没提醒过,发一条本地通知。
+/// 接近(NEAR)或达到(REACHED)且这一级别在本窗口期还没提醒过,发一条本地通知。
 enum ThresholdAlerts {
 
     /// 一条阈值的当前状态(界面展示用)
@@ -104,15 +104,19 @@ enum ThresholdAlerts {
         let today = LocalDate(from: now, in: .current)
         let notified = ThresholdStore.notifiedKeys()
         for item in items where item.status.level != .ok {
-            let key = item.status.threshold.notifyKey(today: today)
+            let t = item.status.threshold
+            // 去重键带上级别(与 Android 一致):先「接近」提醒过,之后「达到」仍要再提醒一次
+            let key = t.notifyKey(today: today) + "|" + (item.status.level == .reached ? "REACHED" : "NEAR")
             guard !notified.contains(key) else { continue }
             ThresholdStore.markNotified(key)
             let content = UNMutableNotificationContent()
             content.title = "天数提醒"
             content.body = message(item)
             content.sound = .default
+            // 通知标识按「这条阈值」(地区 + 窗口,不带级别):「达到」那条替换掉通知中心里的「接近」
             UNUserNotificationCenter.current().add(
-                UNNotificationRequest(identifier: "threshold-" + key, content: content, trigger: nil)
+                UNNotificationRequest(identifier: "threshold-\(t.regionCode)|\(t.window.rawValue)",
+                                      content: content, trigger: nil)
             )
         }
     }

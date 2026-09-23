@@ -25,6 +25,8 @@ final class DataStore {
     var onWriteFailure: ((String) -> Void)?
 
     private let dir: URL
+    /// 应用沙盒里的旧数据目录(v0.1 / 未开 App Group 的自签构建写在这里);清除全部数据时一并删掉
+    private let legacyDir: URL
     private var punchesURL: URL { dir.appendingPathComponent("punches.json") }
     private var overridesURL: URL { dir.appendingPathComponent("overrides.json") }
 
@@ -32,6 +34,7 @@ final class DataStore {
         let fm = FileManager.default
         let legacy = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("TernDays", isDirectory: true)
+        legacyDir = legacy
         if let group = fm.containerURL(forSecurityApplicationGroupIdentifier: AppGroup.id) {
             dir = group.appendingPathComponent("TernDays", isDirectory: true)
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -144,15 +147,24 @@ final class DataStore {
         }
     }
 
-    /// 老版本（v0.1）数据写在应用沙盒；启用 App Group 后做一次性搬迁
+    /// 老版本（v0.1）数据写在应用沙盒；启用 App Group 后做一次性搬迁。
+    /// 搬完删掉沙盒里的源文件:否则「清除本机全部数据」(或损坏文件被改名)后 App Group 里没有文件,
+    /// 下次启动又会把这份冻结的旧记录搬回来。App Group 可用时沙盒这份从来不读,删掉不丢数据。
     private static func migrate(from old: URL, to new: URL) {
         let fm = FileManager.default
         for name in ["punches.json", "overrides.json"] {
             let src = old.appendingPathComponent(name)
             let dst = new.appendingPathComponent(name)
-            if fm.fileExists(atPath: src.path) && !fm.fileExists(atPath: dst.path) {
-                try? fm.copyItem(at: src, to: dst)
+            guard fm.fileExists(atPath: src.path) else { continue }
+            if !fm.fileExists(atPath: dst.path) {
+                do {
+                    try fm.copyItem(at: src, to: dst)
+                } catch {
+                    continue // 没搬成(如首次解锁前读不出源文件):源文件留着,下次启动再搬
+                }
             }
+            // 刚搬完,或早先版本已搬过却留着源文件:沙盒里只剩一份旧副本
+            try? fm.removeItem(at: src)
         }
     }
 
@@ -362,7 +374,7 @@ final class DataStore {
         }
     }
 
-    /// 清除本机全部记录:删数据文件、清内存。用户明确要求清除,封印中(读不出来)的文件也照删。
+    /// 清除本机全部记录:删数据文件(含沙盒旧副本、损坏备份)、清内存。用户明确要求清除,封印中(读不出来)的文件也照删。
     /// 引导标记保留(清空后仍按已完成引导使用,下一次打卡即新的「首点」)。
     /// @return false = 有文件没删掉(被数据保护锁着),界面提示解锁后重试
     @discardableResult
@@ -393,6 +405,20 @@ final class DataStore {
             } else {
                 overrides = []
                 overridesUnreadable = false
+            }
+            // 「不可恢复」要名副其实:沙盒里的旧目录(否则下次启动被 migrate 搬回来)
+            // 和读档时改名保留的损坏文件(里面同样是完整的位置历史)也一并删掉
+            var leftovers: [URL] = []
+            if legacyDir.standardizedFileURL.path != dir.standardizedFileURL.path {
+                leftovers.append(legacyDir.appendingPathComponent("punches.json"))
+                leftovers.append(legacyDir.appendingPathComponent("overrides.json"))
+            }
+            let names = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
+            for name in names where name.hasPrefix("punches.corrupt-") || name.hasPrefix("overrides.corrupt-") {
+                leftovers.append(dir.appendingPathComponent(name))
+            }
+            for url in leftovers where fm.fileExists(atPath: url.path) {
+                do { try fm.removeItem(at: url) } catch { ok = false }
             }
             return ok
         }

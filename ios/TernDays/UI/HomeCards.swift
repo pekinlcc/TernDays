@@ -38,7 +38,7 @@ struct HomeExtras {
                       limits: isCurrentYear ? items.filter { $0.status.threshold.regionCode == r.code } : [])
         }
         if isCurrentYear {
-            // 配了上限却还没去过的地区也列出来(0 天,还剩整额)
+            // 配了上限、本年还没去过的地区也列出来(本年 0 天;滚动窗口的用量可能来自去年)
             var seen = Set(rows.map(\.code))
             for item in items where !seen.contains(item.status.threshold.regionCode) {
                 let code = item.status.threshold.regionCode
@@ -137,12 +137,15 @@ struct RegionCard: View {
     }
 
     private func row(_ r: HomeExtras.RegionRow) -> some View {
-        let citiesText: String = r.cities > 0 ? "\(r.cities) 个城市" : "还没去过"
-        return VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .lastTextBaseline, spacing: 8) {
                 Text(r.name).font(.system(size: 15, weight: .semibold)).foregroundColor(Td.ink)
-                Text(citiesText)
-                    .font(.system(size: 11)).foregroundColor(Td.faint)
+                // 只因配了上限才列出的地区(本年 0 天)不写「还没去过」:「最近 180 天」的上限
+                // 可能算到去年的天数,下面那行「还剩 N 天」会与之矛盾(与 Android 一样只在有城市时写)
+                if r.cities > 0 {
+                    Text("\(r.cities) 个城市")
+                        .font(.system(size: 11)).foregroundColor(Td.faint)
+                }
                 Spacer()
                 Text(DayCounting.formatDays(r.days))
                     .font(.system(size: 20, weight: .bold)).foregroundColor(Td.accentDeep)
