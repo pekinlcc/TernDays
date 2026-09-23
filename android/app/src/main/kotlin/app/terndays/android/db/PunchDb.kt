@@ -336,8 +336,9 @@ class PunchDb private constructor(context: Context) :
                     oAdd++
                 } else {
                     oSkip++
-                    val local = overridesOn(listOf(o.localDate))
-                        .firstOrNull { it.scope == o.scope || it.scope == OverrideScope.FULL || o.scope == OverrideScope.FULL }
+                    // 冲突 = 键(日期 + 范围)相同而城市不同(:core MergeRules.isConflict 的口径,与 iOS 一致);
+                    // 因整天 / 半天互斥而跳过的不算「与旧手机不一致」
+                    val local = overridesOn(listOf(o.localDate)).firstOrNull { it.scope == o.scope }
                     if (local != null && MergeRules.isConflict(local, o)) oConflict++
                 }
             }
@@ -397,13 +398,15 @@ class PunchDb private constructor(context: Context) :
     /** 若干天的全部更正(撤销用的快照)。 */
     fun overridesOn(dates: Collection<LocalDate>): List<DayOverride> {
         if (dates.isEmpty()) return emptyList()
-        val marks = dates.joinToString(",") { "?" }
+        // 按起止日期查再在内存里过滤:IN (?,?,…) 每个日期一个变量,几年的区间补记会超过
+        // Android 8–11 自带 SQLite 的 999 个变量上限直接抛异常(日期按 ISO 字符串比较即可)
+        val wanted = dates.toHashSet()
         return readableDatabase.rawQuery(
-            "SELECT local_date, city_key, city_name, scope FROM day_override WHERE local_date IN ($marks)",
-            dates.map { it.toString() }.toTypedArray(),
+            "SELECT local_date, city_key, city_name, scope FROM day_override WHERE local_date BETWEEN ? AND ?",
+            arrayOf(dates.min().toString(), dates.max().toString()),
         ).use { c ->
-            val out = ArrayList<DayOverride>(c.count)
-            while (c.moveToNext()) out.add(readOverride(c))
+            val out = ArrayList<DayOverride>()
+            while (c.moveToNext()) readOverride(c).takeIf { it.localDate in wanted }?.let { out.add(it) }
             out
         }
     }

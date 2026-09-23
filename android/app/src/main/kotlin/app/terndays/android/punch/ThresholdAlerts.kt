@@ -72,8 +72,9 @@ object ThresholdAlerts {
             .setContentIntent(Intents.openApp(context))
             .setAutoCancel(true)
             .build()
-        // 每个地区一个通知 id,多个阈值同时触发时不互相覆盖
-        val id = 2000 + (s.threshold.regionCode.hashCode() and 0x3FF)
+        // 每条阈值(地区 + 窗口)一个通知 id:同一地区可同时设自然年与最近 180 天两条,不能互相覆盖;
+        // 同一条阈值的「已达上限」则顶替它自己的「快到上限」
+        val id = 2000 + ((s.threshold.regionCode + "|" + s.threshold.window.name).hashCode() and 0x3FF)
         context.getSystemService(NotificationManager::class.java).notify(id, n)
     }
 }

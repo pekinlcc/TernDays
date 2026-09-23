@@ -101,8 +101,10 @@ object UndoCenter {
 
 @Composable
 fun UndoHost(modifier: Modifier = Modifier) {
-    val item = UndoCenter.current.value ?: return
+    // 作用域必须在提前 return 之前拿:点「撤销」会立刻清掉提示,若作用域跟着提示一起被遗忘,
+    // 撤销协程写完库就被取消,界面 / 小组件刷新和「已撤销」都会丢
     val scope = rememberCoroutineScope()
+    val item = UndoCenter.current.value ?: return
     LaunchedEffect(item.id) {
         delay(5_000)
         UndoCenter.dismiss(item)

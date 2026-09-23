@@ -1,6 +1,7 @@
 package app.terndays.android.ui
 
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -248,7 +249,14 @@ internal fun DataCard() {
     val createDoc = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri: Uri? ->
         val pass = backupPass
         backupPass = null
-        if (uri == null || pass == null) return@rememberLauncherForActivityResult
+        if (uri == null) return@rememberLauncherForActivityResult
+        if (pass == null) {
+            // 选文件期间页面被重建(旋转、切深浅色、进程被回收),口令不会跨重建保存(不该落盘):
+            // 删掉系统已经建好的空文件,并说清楚要重来,否则会留下一个恢复时报「不是备份文件」的 0 字节文件
+            runCatching { DocumentsContract.deleteDocument(app.contentResolver, uri) }
+            task = DataTask.Result("备份没有完成", "选文件时页面被重建了，口令没有保留。请重新备份一次。")
+            return@rememberLauncherForActivityResult
+        }
         task = DataTask.Busy("正在加密备份…")
         scope.launch {
             task = try {

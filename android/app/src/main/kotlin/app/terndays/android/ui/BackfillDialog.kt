@@ -23,7 +23,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -42,6 +41,9 @@ import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
+import androidx.compose.runtime.produceState
+import app.terndays.android.DataBus
+import app.terndays.core.DayAttribution
 
 /**
  * 补记:
@@ -61,7 +63,6 @@ internal fun BackfillDialog(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val today = LocalDate.now()
     var rangeMode by rememberSaveable { mutableStateOf(false) }
     var from by rememberSaveable { mutableStateOf(unrecorded.maxOrNull() ?: today.minusDays(1)) }
@@ -71,6 +72,19 @@ internal fun BackfillDialog(
     var done by rememberSaveable { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var picking by remember { mutableStateOf<String?>(null) } // "from" / "to"
+    // 单日补记后弹窗不关,底部的「撤销」提示被弹窗盖住点不到:撤销放在弹窗里
+    var lastUndo by remember { mutableStateOf<Pair<LocalDate, suspend () -> Unit>?>(null) }
+
+    // 所选日期现在记成了什么:补记会整天覆盖,已有记录的日子要先说清楚(与 iOS 同口径)
+    val dataVersion = DataBus.version.intValue
+    val current by produceState<Map<LocalDate, DayAttribution>>(emptyMap(), rangeMode, from, to, dataVersion) {
+        val end = minOf(if (rangeMode) to else from, today)
+        value = if (end.isBefore(from)) {
+            emptyMap()
+        } else {
+            runCatching { loadRangeData(context, from, end).stats.days }.getOrDefault(emptyMap())
+        }
+    }
 
     fun write(key: String, name: String) {
         error = null
@@ -94,10 +108,16 @@ internal fun BackfillDialog(
             Fmt.monthDay(from)
         }
         val earlier = trackingSince == null || from.isBefore(trackingSince)
-        scope.launch { Corrections.apply(context, plan, "已补记 $label · $name") }
+        val written = from
         if (rangeMode) {
+            // 区间写完就关弹窗:开始记录日前移的说明只能放进底部提示里
+            val note = if (earlier) "；开始记录日提前到 ${Fmt.monthDay(from)}" else ""
+            Corrections.scope.launch { Corrections.apply(context, plan, "已补记 $label · $name$note") }
             onDismiss()
         } else {
+            Corrections.scope.launch {
+                Corrections.apply(context, plan, "已补记 $label · $name")?.let { lastUndo = written to it }
+            }
             // 单日:不关弹窗,接着补下一天(换成下一个还没补的日子)
             done = "已补记 $label · $name" +
                 if (earlier) "\n开始记录日提前到 ${Fmt.monthDay(from)}，之后没有记录的日子会算作可补记" else ""
@@ -138,7 +158,38 @@ internal fun BackfillDialog(
                         }
                     }
                 }
-                done?.let { Text(it, fontSize = 12.sp, color = Td.AccentDeep, lineHeight = 18.sp) }
+                done?.let { msg ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(msg, fontSize = 12.sp, color = Td.AccentDeep, lineHeight = 18.sp, modifier = Modifier.weight(1f))
+                        lastUndo?.let { (date, undo) ->
+                            TdTextButton("撤销", fontSize = 12.sp) {
+                                lastUndo = null
+                                done = "已撤销 ${Fmt.monthDay(date)} 的补记"
+                                from = date
+                                to = date
+                                Corrections.scope.launch { undo() }
+                            }
+                        }
+                    }
+                }
+                // 所选日期已有记录:补记会整天改掉,先说清楚
+                val recorded = current.filterValues { it.shares.isNotEmpty() }
+                if (rangeMode) {
+                    val span = java.time.temporal.ChronoUnit.DAYS.between(from, to) + 1
+                    Text(
+                        if (recorded.isEmpty()) "共 $span 天" else "共 $span 天，其中 ${recorded.size} 天已有记录，会一并改为所选城市",
+                        fontSize = 12.sp, color = if (recorded.isEmpty()) Td.Muted else Td.WarmDeep, lineHeight = 18.sp,
+                    )
+                } else {
+                    recorded[from]?.let { a ->
+                        Text(
+                            "这一天现在记为：" + a.shares.joinToString(" / ") {
+                                it.cityName + if (it.weight >= 1.0) " +1" else " +0.5"
+                            } + "。补记会按整天改为所选城市",
+                            fontSize = 12.sp, color = Td.WarmDeep, lineHeight = 18.sp,
+                        )
+                    }
+                }
                 error?.let { Text(it, fontSize = 12.sp, color = Td.Danger) }
                 Text(
                     if (rangeMode) "这段日子在哪个城市？" else "${Fmt.monthDay(from)} 在哪个城市？",

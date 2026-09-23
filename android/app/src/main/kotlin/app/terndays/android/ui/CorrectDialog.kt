@@ -49,6 +49,9 @@ fun CityCorrectDialog(
     onRestoreAuto: (() -> Unit)?,
 ) {
     var confirmRestore by remember { mutableStateOf(false) }
+    // 已经有半天更正的日子(例如区间补记的首末日)一定要能选范围:否则只能继续改那半天,
+    // 既变不回整天,也补不上另一半
+    val showScopes = allowHalfScope || existing.any { it.scope != OverrideScope.FULL }
     // 已经改过半天的日子重新打开时停在那个半天上,否则一次重选就把另半天也吞掉了
     var scope by remember {
         mutableStateOf(
@@ -81,14 +84,14 @@ fun CityCorrectDialog(
                 }
                 Text(hint, fontSize = 12.sp, color = Td.Muted, lineHeight = 18.sp)
 
-                if (allowHalfScope) {
+                if (showScopes) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         ScopeChip("整天", scope == OverrideScope.FULL) { scope = OverrideScope.FULL }
                         ScopeChip("只改上半天", scope == OverrideScope.MORNING) { scope = OverrideScope.MORNING }
                         ScopeChip("只改下半天", scope == OverrideScope.EVENING) { scope = OverrideScope.EVENING }
                     }
                 }
-                CityPicker(recentCities) { key, name -> onPick(key, name, scope) }
+                CityPicker(recentCities) { key, name -> onPick(key, name, if (showScopes) scope else OverrideScope.FULL) }
                 if (confirmRestore && onRestoreAuto != null) {
                     Text(
                         "这一天没有打卡，恢复后将变为无记录。",

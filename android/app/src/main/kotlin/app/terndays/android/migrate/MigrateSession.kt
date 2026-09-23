@@ -44,6 +44,20 @@ object MigrateSession {
         server = s
         s.start()
         watchNetwork(app)
+        main.postDelayed(poll, POLL_MS)
+    }
+
+    /**
+     * 开热点只多出一块网卡、默认网络不变,网络回调不会触发:迁移页开着时每 3 秒再看一眼地址
+     * (地址没变就什么都不做;失败态的自动重试另有限频)。
+     */
+    private const val POLL_MS = 3_000L
+    private val poll: Runnable = object : Runnable {
+        override fun run() {
+            if (server == null) return
+            onNetworkChanged()
+            main.postDelayed(this, POLL_MS)
+        }
     }
 
     /** 失败态的「重试」:换一个新的密钥与端口重新开始。 */
@@ -53,6 +67,7 @@ object MigrateSession {
     }
 
     fun stop() {
+        main.removeCallbacks(poll)
         server?.let { runCatching { it.stop() } }
         server = null
         unwatchNetwork()
@@ -75,7 +90,9 @@ object MigrateSession {
     private fun onNetworkChanged() {
         main.post {
             val app = appContext ?: return@post
-            if (failure.value != null && doneCount.value == null) {
+            // 只对「没有局域网地址」这一种失败自动重来(连上 Wi-Fi / 开了热点就好了);
+            // 其他失败(端口、系统异常)交给页面上的「重试」,不能每 3 秒重开一次服务
+            if (failure.value?.startsWith("本机没有局域网地址") == true && doneCount.value == null) {
                 // 只有真的有了局域网地址才重来,并且限频:注册回调本身就会立刻回调一次,
                 // 只有蜂窝网络时不能陷入「失败 → 重试 → 失败」的循环
                 val now = System.currentTimeMillis()

@@ -162,7 +162,7 @@ fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
             onDismiss = { correcting = null },
             onPick = { key, name, scope0 ->
                 correcting = null
-                scope.launch {
+                Corrections.scope.launch {
                     Corrections.apply(
                         context, listOf(DayOverride(target, key, name, scope0)),
                         "${Fmt.monthDay(target)} 已改为 $name",
@@ -172,7 +172,7 @@ fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
             onRestoreAuto = if (d?.overrides?.any { it.localDate == target } == true) {
                 {
                     correcting = null
-                    scope.launch { Corrections.restoreAuto(context, target) }
+                    Corrections.scope.launch { Corrections.restoreAuto(context, target) }
                 }
             } else {
                 null

@@ -110,6 +110,17 @@ class PunchService : Service() {
             inWindow != null -> inWindow
             requested == Slot.EXTRA -> Slot.EXTRA // 首点：首次安装立即记录，不限时段
             else -> {
+                // 用户在通知里点「立即打卡」时这个时段的窗口已经关了:说清楚,别悄无声息
+                // (通知按钮不会自动收起,不说的话用户会一直对着一个点了没反应的按钮)
+                if (fromForeground && requested != null) {
+                    recordAttempt(requested, "late", "打卡时间已过")
+                    notifyRemind(
+                        "${slotLabel(requested)}的打卡时间已过",
+                        "这个时段已经不能自动记录了，可在首页点「纠正」手动指定城市",
+                    )
+                    stopIfIdle()
+                    return START_NOT_STICKY
+                }
                 // 闹钟(或重试)被系统推迟到窗口外：本时段作废。重试落到窗口外同样要说一声,不能静默
                 if (requested != null) {
                     recordAttempt(requested, "late", "被系统推迟到了窗口之外")
@@ -437,12 +448,13 @@ class PunchService : Service() {
         val key = "$date|${slot?.name ?: "-"}|$kind"
         if (Prefs.lastRemindKey(this) == key) return
         Prefs.setLastRemindKey(this, key)
-        notifyRemind(title, text, punchAction)
+        notifyRemind(title, text, if (punchAction) slot else null)
     }
 
-    private fun notifyRemind(title: String, text: String, punchAction: Boolean = false) {
+    /** punchSlot 非空时带「立即打卡」按钮,并记下是哪个时段(窗口关了再点要能说清楚) */
+    private fun notifyRemind(title: String, text: String, punchSlot: Slot? = null) {
         getSystemService(NotificationManager::class.java)
-            .notify(NOTIF_REMIND_ID, remindNotification(this, title, text, punchAction))
+            .notify(NOTIF_REMIND_ID, remindNotification(this, title, text, punchSlot))
     }
 
     companion object {
@@ -473,7 +485,7 @@ class PunchService : Service() {
          * 失败提醒。punchAction:带一个「立即打卡」按钮——从通知交互启动的前台服务
          * 不受后台启动限制,也能拿到「仅使用期间」的定位,应用被杀之后也能一键补上。
          */
-        private fun remindNotification(context: Context, title: String, text: String, punchAction: Boolean): Notification {
+        private fun remindNotification(context: Context, title: String, text: String, punchSlot: Slot?): Notification {
             val b = NotificationCompat.Builder(context, TernDaysApp.CHANNEL_REMIND)
                 .setSmallIcon(R.drawable.ic_stat_tern)
                 .setContentTitle(title)
@@ -482,8 +494,10 @@ class PunchService : Service() {
                 .setContentIntent(Intents.openApp(context))
                 .setOnlyAlertOnce(true)
                 .setAutoCancel(true)
-            if (punchAction) {
-                val intent = Intent(context, PunchService::class.java).putExtra(EXTRA_FOREGROUND, true)
+            if (punchSlot != null) {
+                val intent = Intent(context, PunchService::class.java)
+                    .putExtra(EXTRA_FOREGROUND, true)
+                    .putExtra(PunchScheduler.EXTRA_SLOT, punchSlot.name)
                 val pi = PendingIntent.getForegroundService(
                     context, REQUEST_PUNCH_NOW, intent,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -519,7 +533,8 @@ class PunchService : Service() {
                     NOTIF_REMIND_ID,
                     remindNotification(
                         context, "打卡被系统拦下了",
-                        "点「立即打卡」完成这次记录，并在设置中开启自启动 / 后台运行", punchAction = true,
+                        "点「立即打卡」完成这次记录，并在设置中开启自启动 / 后台运行",
+                        punchSlot = slot,
                     ),
                 )
             }

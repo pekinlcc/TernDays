@@ -111,6 +111,12 @@ fun HomeScreen(
         value = withContext(Dispatchers.IO) { runCatching { ThresholdAlerts.statuses(context) }.getOrDefault(emptyList()) }
     }
     var confirmDeleteFuture by remember { mutableStateOf(false) }
+    // 「当前连续第 N 天」和「最近 3 天漏记」要跨年看:只看今年的话元旦一过就从头数、
+    // 12 月底的漏记在 1 月初也看不见(与 iOS 同为最近 400 天)
+    val recent by produceState<YearData?>(null, tick, dataVersion) {
+        val t = LocalDate.now()
+        value = runCatching { loadRangeData(context, t.minusDays(400), t) }.getOrNull()
+    }
 
     Column(
         Modifier.fillMaxSize().background(Td.Bg).statusBarsPadding()
@@ -136,12 +142,10 @@ fun HomeScreen(
         val d = data
         val today = LocalDate.now()
         // 最近 3 天(不含今天)出现过无记录日:多半是被系统限制了后台
-        val recentGaps = if (isCurrentYear) {
-            d?.stats?.unrecordedDates?.count { !it.isBefore(today.minusDays(3)) && it.isBefore(today) } ?: 0
-        } else {
-            0
-        }
+        val recentGaps = recent?.stats?.unrecordedDates
+            ?.count { !it.isBefore(today.minusDays(3)) && it.isBefore(today) } ?: 0
         val stays = remember(d) { d?.let { Stays.fold(it.stats.days) } ?: emptyList() }
+        val currentStay = remember(recent) { recent?.let { Stays.current(Stays.fold(it.stats.days), today) } }
         val regions = remember(d) { d?.let { Regions.summarize(it.stats) } ?: emptyList() }
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -198,8 +202,8 @@ fun HomeScreen(
             if (regions.size >= 2 || (isCurrentYear && thresholdStatus.isNotEmpty())) {
                 item { RegionCard(regions, if (isCurrentYear) thresholdStatus else emptyList()) }
             }
-            if (stays.isNotEmpty()) {
-                item { StaysCard(stays, if (isCurrentYear) Stays.current(stays, today) else null) }
+            if (stays.isNotEmpty() || (isCurrentYear && currentStay != null)) {
+                item { StaysCard(stays, if (isCurrentYear) currentStay else null) }
             }
             item {
                 Row(Modifier.padding(horizontal = 2.dp)) {
@@ -259,14 +263,14 @@ fun HomeScreen(
             onDismiss = { correctingToday = false },
             onPick = { key, name, scope0 ->
                 correctingToday = false
-                scope.launch {
+                Corrections.scope.launch {
                     Corrections.apply(context, listOf(DayOverride(today(), key, name, scope0)), "已改为 $name")
                 }
             },
             onRestoreAuto = if (data?.overrides?.any { it.localDate == today() } == true) {
                 {
                     correctingToday = false
-                    scope.launch { Corrections.restoreAuto(context, today()) }
+                    Corrections.scope.launch { Corrections.restoreAuto(context, today()) }
                 }
             } else {
                 null
@@ -517,9 +521,15 @@ private fun TodayCard(data: YearData?, attempt: Prefs.Attempt?, paused: Boolean,
 private fun AttemptLine(attempt: Prefs.Attempt?, paused: Boolean) {
     val zone = ZoneId.systemDefault()
     fun hm(ms: Long) = Instant.ofEpochMilli(ms).atZone(zone).toLocalTime().let { "%02d:%02d".format(it.hour, it.minute) }
-    val last = attempt?.takeIf {
-        Instant.ofEpochMilli(it.atMs).atZone(zone).toLocalDate() == LocalDate.now()
-    }?.let { a ->
+    // 不是今天的也要显示(昨天傍晚失败了,今早一看就该知道),日期写在时刻前面
+    val last = attempt?.let { a ->
+        val day = Instant.ofEpochMilli(a.atMs).atZone(zone).toLocalDate()
+        val today = LocalDate.now()
+        val dayPrefix = when (day) {
+            today -> ""
+            today.minusDays(1) -> "昨天 "
+            else -> Fmt.monthDay(day) + " "
+        }
         val slot = when (a.slot) {
             Slot.MORNING.name -> " · 早点"
             Slot.EVENING.name -> " · 晚点"
@@ -531,7 +541,7 @@ private fun AttemptLine(attempt: Prefs.Attempt?, paused: Boolean) {
             "no_fix" -> a.detail + (a.retryAtMs?.let { " · ${hm(it)} 再试一次" } ?: "")
             else -> a.detail
         }
-        "最近一次尝试 ${hm(a.atMs)}$slot · $result"
+        "最近一次尝试 $dayPrefix${hm(a.atMs)}$slot · $result"
     }
     val next = if (paused) {
         "自动打卡已暂停"

@@ -274,7 +274,7 @@ fun SettingsScreen(
                                             fontSize = 13.sp, color = Td.Ink, modifier = Modifier.weight(1f),
                                         )
                                         TdTextButton("恢复自动", color = Td.WarmDeep, fontSize = 12.sp) {
-                                            scope.launch { Corrections.removeScope(context, o.localDate, o.scope) }
+                                            Corrections.scope.launch { Corrections.removeScope(context, o.localDate, o.scope) }
                                         }
                                     }
                                 }
@@ -406,12 +406,14 @@ fun SettingsScreen(
         }
     }
 
-    if (backfillOpen) {
-        val days = data?.stats?.days ?: emptyMap()
+    // 数据读到之后再打开:补记弹窗只在第一次组合时按「最近一个无记录日」定默认日期,
+    // 先用空列表打开会停在昨天(多半已有记录),一选城市就把昨天整天改掉了
+    if (backfillOpen && data != null) {
+        val days = data.stats.days
         BackfillDialog(
-            unrecorded = data?.stats?.unrecordedDates ?: emptyList(),
-            recentCities = data?.stats?.cities?.map { it.cityKey to it.cityName } ?: emptyList(),
-            trackingSince = data?.stats?.trackingSince,
+            unrecorded = data.stats.unrecordedDates,
+            recentCities = data.stats.cities.map { it.cityKey to it.cityName },
+            trackingSince = data.stats.trackingSince,
             neighbors = { d ->
                 listOf(d.minusDays(1), d.plusDays(1)).flatMap { n ->
                     days[n]?.shares?.map { it.cityKey to it.cityName } ?: emptyList()
