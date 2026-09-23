@@ -2,7 +2,7 @@
 <!--
   本文件由 tools/gen_widget_layouts.py 生成,请勿手改(CI 会检查)。
   2×2 小组件 · 素面 · 选择器预览(示例数据)
-  年份眉题 + Top 3 城市三行等权重(城市名 15 / 天数 19 / 单位 11);行间与末尾的弹性间距平分余量。
+  年份眉题 + Top 3 城市三行等权重(城市名 15,长名自动缩到 12 / 天数 19 / 单位 11);行间与末尾的弹性间距平分余量。
   预览:与真实布局同一层级,填示例数据,供小组件选择器展示。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -43,6 +43,10 @@
             android:fontFamily="sans-serif-medium"
             android:text="@string/widget_preview_city_1"
             android:textSize="15sp"
+            android:autoSizeTextType="uniform"
+            android:autoSizeMinTextSize="12sp"
+            android:autoSizeMaxTextSize="15sp"
+            android:autoSizeStepGranularity="1sp"
             android:textColor="@color/widgetPrimary" />
         <TextView
             android:layout_width="wrap_content"
@@ -87,6 +91,10 @@
             android:fontFamily="sans-serif-medium"
             android:text="@string/widget_preview_city_2"
             android:textSize="15sp"
+            android:autoSizeTextType="uniform"
+            android:autoSizeMinTextSize="12sp"
+            android:autoSizeMaxTextSize="15sp"
+            android:autoSizeStepGranularity="1sp"
             android:textColor="@color/widgetPrimary" />
         <TextView
             android:layout_width="wrap_content"
@@ -131,6 +139,10 @@
             android:fontFamily="sans-serif-medium"
             android:text="@string/widget_preview_city_3"
             android:textSize="15sp"
+            android:autoSizeTextType="uniform"
+            android:autoSizeMinTextSize="12sp"
+            android:autoSizeMaxTextSize="15sp"
+            android:autoSizeStepGranularity="1sp"
             android:textColor="@color/widgetPrimary" />
         <TextView
             android:layout_width="wrap_content"

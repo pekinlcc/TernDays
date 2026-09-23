@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import app.terndays.android.Prefs
 import app.terndays.core.PunchRules
 import app.terndays.core.Slot
 import java.time.LocalDate
@@ -26,6 +27,11 @@ object PunchScheduler {
     private const val REQUEST_CODE_RETRY = 1002
 
     fun scheduleNext(context: Context) {
+        // 暂停自动打卡时不排闹钟,并撤掉已经排上的(开机 / 时区变化 / 回到应用都会走到这里)
+        if (Prefs.punchPaused(context)) {
+            cancelAll(context)
+            return
+        }
         val next = PunchRules.nextPunchTime(ZonedDateTime.now())
         val slot = if (next.hour < 12) Slot.MORNING else Slot.EVENING
 
@@ -50,11 +56,11 @@ object PunchScheduler {
     /**
      * 定位失败后在补捕窗口内再试**一次**(判定见 :core PunchRules.retryAt:重试本身失败不再排,
      * 窗口终点按决策日期算)。
-     * @return true = 已排上重试;false = 不该或来不及重试,调用方去发失败提醒
+     * @return 排上的重试时刻(毫秒);null = 不该或来不及重试,调用方去发失败提醒
      */
-    fun scheduleRetry(context: Context, decisionDate: LocalDate, slot: Slot, isRetry: Boolean): Boolean {
+    fun scheduleRetry(context: Context, decisionDate: LocalDate, slot: Slot, isRetry: Boolean): Long? {
         val zone = ZoneId.systemDefault()
-        val at = PunchRules.retryAt(decisionDate, slot, LocalDateTime.now(zone), isRetry) ?: return false
+        val at = PunchRules.retryAt(decisionDate, slot, LocalDateTime.now(zone), isRetry) ?: return null
         val am = context.getSystemService(AlarmManager::class.java)
         val ms = at.atZone(zone).toInstant().toEpochMilli()
         return runCatching {
@@ -63,7 +69,23 @@ object PunchScheduler {
             } else {
                 am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, ms, retryIntent(context, slot))
             }
-        }.isSuccess
+            ms
+        }.getOrNull()
+    }
+
+    /** 暂停自动打卡:撤掉定时打卡与重试两类闹钟。 */
+    fun cancelAll(context: Context) {
+        runCatching {
+            val am = context.getSystemService(AlarmManager::class.java)
+            val punch = Intent(context, PunchReceiver::class.java).setAction(ACTION_PUNCH)
+            am.cancel(
+                PendingIntent.getBroadcast(
+                    context, REQUEST_CODE, punch,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+        }
+        cancelRetry(context)
     }
 
     /** 该时段已经打上:撤掉还没触发的重试,免得到点又闪一次前台通知。 */

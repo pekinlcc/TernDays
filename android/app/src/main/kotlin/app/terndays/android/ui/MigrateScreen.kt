@@ -41,6 +41,11 @@ import app.terndays.android.migrate.MigrateSession
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import app.terndays.android.DataBus
+import app.terndays.android.Prefs
+import app.terndays.android.punch.PunchScheduler
 
 private sealed interface SendState {
     data object Preparing : SendState
@@ -81,14 +86,7 @@ fun MigrateSendScreen(onBack: () -> Unit) {
 
     Column(Modifier.fillMaxSize().background(Td.Bg).statusBarsPadding().padding(horizontal = 20.dp)) {
         Spacer(Modifier.height(10.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconSquare(R.drawable.ic_chev_left, "返回") { onBack() }
-            Text(
-                "迁移到新手机", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Td.Ink,
-                modifier = Modifier.weight(1f), textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.width(36.dp))
-        }
+        ScreenHeader("迁移到新手机", onBack)
         Spacer(Modifier.height(20.dp))
 
         when (val s = state) {
@@ -127,17 +125,37 @@ fun MigrateSendScreen(onBack: () -> Unit) {
                 )
             }
             is SendState.Done -> CenterHint {
+                var paused by remember { mutableStateOf(Prefs.punchPaused(context)) }
                 Text("✓", fontSize = 44.sp, color = Td.Accent)
                 Spacer(Modifier.height(10.dp))
                 Text("迁移完成", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Td.Ink)
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "新手机已导入 ${s.count} 条记录。本机数据保持不变。",
+                    if (s.count == 0) "新手机已有全部记录，无需导入。" else "新手机导入了 ${s.count} 条记录。本机数据保持不变。",
                     fontSize = 13.sp, color = Td.Muted, textAlign = TextAlign.Center,
                 )
+                Spacer(Modifier.height(18.dp))
+                // 换机后两台手机会各记各的:说清楚,并给一键停掉旧手机
+                Text(
+                    "这台旧手机仍会继续自动打卡，之后的记录不会同步到新手机。",
+                    fontSize = 12.sp, color = Td.Faint, textAlign = TextAlign.Center, lineHeight = 18.sp,
+                )
+                Spacer(Modifier.height(6.dp))
+                if (paused) {
+                    Text("已停止本机自动打卡", fontSize = 13.sp, color = Td.AccentDeep)
+                } else {
+                    TdTextButton("停止本机自动打卡") {
+                        Prefs.setPunchPaused(context, true)
+                        PunchScheduler.cancelAll(context)
+                        DataBus.bump()
+                        paused = true
+                    }
+                }
             }
             is SendState.Failed -> CenterHint {
                 Text(s.message, fontSize = 13.sp, color = Td.WarmDeep, textAlign = TextAlign.Center, lineHeight = 20.sp)
+                Spacer(Modifier.height(10.dp))
+                TdTextButton("重试") { MigrateSession.retry(context) }
             }
         }
     }

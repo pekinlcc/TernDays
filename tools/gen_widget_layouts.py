@@ -16,7 +16,7 @@ HEADER = '''<?xml version="1.0" encoding="utf-8"?>
 <!--
   本文件由 tools/gen_widget_layouts.py 生成,请勿手改(CI 会检查)。
   2×2 小组件 · {name}
-  年份眉题 + Top 3 城市三行等权重(城市名 15 / 天数 19 / 单位 11);行间与末尾的弹性间距平分余量。
+  年份眉题 + Top 3 城市三行等权重(城市名 15,长名自动缩到 12 / 天数 19 / 单位 11);行间与末尾的弹性间距平分余量。
   {note}
 -->
 '''
@@ -76,6 +76,10 @@ ROW = '''    <LinearLayout
             android:includeFontPadding="false"
             android:fontFamily="sans-serif-medium"
 {city_text}            android:textSize="15sp"
+            android:autoSizeTextType="uniform"
+            android:autoSizeMinTextSize="12sp"
+            android:autoSizeMaxTextSize="15sp"
+            android:autoSizeStepGranularity="1sp"
             android:textColor="@color/{primary}" />
         <TextView
 {days_id}            android:layout_width="wrap_content"

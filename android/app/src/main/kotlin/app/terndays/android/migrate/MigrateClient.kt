@@ -1,6 +1,9 @@
 package app.terndays.android.migrate
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
+import app.terndays.android.ui.UndoCenter
 import app.terndays.android.DataBus
 import app.terndays.android.db.PunchDb
 import app.terndays.android.geo.Cities
@@ -43,7 +46,7 @@ object MigrateClient {
                     }
                 }
                 val sock = socket ?: run {
-                    onError("连不上旧手机。请确认:两台手机连着同一个 Wi-Fi(或新手机连上旧手机的热点),旧手机的迁移页面还开着,然后重新扫码。")
+                    onError("连不上旧手机。请确认两台手机连着同一个 Wi-Fi(或新手机连上旧手机的热点),然后在旧手机上重新打开迁移页后再扫。")
                     return@Thread
                 }
                 sock.soTimeout = 30_000
@@ -77,22 +80,29 @@ object MigrateClient {
                 }
                 runCatching { sock.close() }
 
-                // 导入的记录可能来自不同版本的城市库:按时间重放交叉验证重解析(幂等)
-                var remapped = 0
-                if (result.punchesAdded > 0) {
-                    remapped = db.replayResolveAll(Cities.get(context))
-                }
                 // 只补进了手动更正的那次导入同样会改变天数:界面与小组件都要刷新
                 if (result.punchesAdded + result.overridesAdded > 0) {
                     TernDaysWidgetProvider.updateAll(context)
                     DataBus.bump()
                 }
-                onDone(Outcome(result, remapped))
+                // 先报导入结果,再在后台重放:几年的数据重解析要好几秒,不该让人盯着转圈
+                onDone(Outcome(result, 0))
+                if (result.punchesAdded > 0) {
+                    // 导入的记录可能来自不同版本的城市库:按时间重放交叉验证重解析(幂等)
+                    val remapped = runCatching { db.replayResolveAll(Cities.get(context)) }.getOrDefault(0)
+                    if (remapped > 0) {
+                        TernDaysWidgetProvider.updateAll(context)
+                        DataBus.bump()
+                        Handler(Looper.getMainLooper()).post {
+                            UndoCenter.show("已按本机城市库修正 $remapped 条城市判定")
+                        }
+                    }
+                }
             } catch (e: Exception) {
                 onError(
                     when (e) {
                         is IllegalArgumentException -> e.message ?: "数据校验失败"
-                        else -> "传输中断:${e.message ?: e.javaClass.simpleName}。请重新扫码再试。"
+                        else -> "传输中断:${e.message ?: e.javaClass.simpleName}。请在旧手机上重新打开迁移页后再扫。"
                     },
                 )
             } finally {

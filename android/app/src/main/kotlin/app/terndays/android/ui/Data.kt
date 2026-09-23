@@ -91,3 +91,31 @@ fun LoadErrorCard(onRetry: () -> Unit) {
         }
     }
 }
+
+/** 任意区间(最近 180 天、自定义区间)的数据,口径与年度统计相同(:core computeRangeStats)。 */
+suspend fun loadRangeData(context: Context, from: LocalDate, to: LocalDate): YearData = withContext(Dispatchers.IO) {
+    val db = PunchDb.get(context)
+    val punches = db.allPunches().filter { !it.localDate.isBefore(from) && !it.localDate.isAfter(to) }
+    val overrides = db.allOverrides().filter { !it.localDate.isBefore(from) && !it.localDate.isAfter(to) }
+    val today = LocalDate.now()
+    val stats = DayCounting.computeRangeStats(
+        from, minOf(to, today), today, punches, overrides,
+        nowHour = LocalTime.now().hour,
+        earliestRecordDate = db.earliestRecordDate(),
+    )
+    YearData(stats, punches, overrides, db.yearsWithData(today.year))
+}
+
+/** range 为 null 时不读库(调用方此时用的是按年的数据)。 */
+@Composable
+fun rememberRangeData(range: Pair<LocalDate, LocalDate>?): YearDataState {
+    val context = LocalContext.current
+    var attempt by remember { mutableIntStateOf(0) }
+    val dataVersion = DataBus.version.intValue
+    val result by produceState<Result<YearData>?>(null, range, dataVersion, attempt) {
+        value = null
+        val r = range ?: return@produceState
+        value = runCatching { loadRangeData(context, r.first, r.second) }
+    }
+    return YearDataState(result?.getOrNull(), result?.isFailure == true, retry = { attempt++ })
+}

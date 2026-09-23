@@ -3,6 +3,7 @@ package app.terndays.android.punch
 import android.Manifest
 import android.app.Notification
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -84,10 +85,17 @@ class PunchService : Service() {
         } catch (_: SecurityException) {
             // Android 14+ 定位权限被收回后,location 类型前台服务直接抛异常:
             // 不能崩,发提醒并安静退出(下一次闹钟到点会再试)
+            recordAttempt(null, "permission", "缺定位权限")
             remindOnce(LocalDate.now(), null, "perm", PERM_TITLE, PERM_TEXT)
             stopIfIdle()
             return START_NOT_STICKY
         } catch (_: IllegalStateException) {
+            stopIfIdle()
+            return START_NOT_STICKY
+        }
+        // 暂停期间来的请求(已经排上的闹钟、通知里的按钮)一律不打
+        if (Prefs.punchPaused(this)) {
+            recordAttempt(null, "paused", "自动打卡已暂停")
             stopIfIdle()
             return START_NOT_STICKY
         }
@@ -104,6 +112,7 @@ class PunchService : Service() {
             else -> {
                 // 闹钟(或重试)被系统推迟到窗口外：本时段作废。重试落到窗口外同样要说一声,不能静默
                 if (requested != null) {
+                    recordAttempt(requested, "late", "被系统推迟到了窗口之外")
                     remindOnce(
                         now.toLocalDate(), requested, "late",
                         "${slotLabel(requested)}没能按时记录", LATE_TEXT,
@@ -129,6 +138,7 @@ class PunchService : Service() {
         }
         // 用户选「大致位置」时只有 COARSE:精度差但仍能判到城市(误差圈规则会兜底)
         if (!hasLocationPermission()) {
+            recordAttempt(slot, "permission", "缺定位权限")
             remindOnce(decision.date, slot, "perm", PERM_TITLE, PERM_TEXT)
             stopIfIdle()
             return START_NOT_STICKY
@@ -136,6 +146,7 @@ class PunchService : Service() {
         // 后台触发(闹钟/开机/时区变化/重试)而定位只是「仅使用期间」:拿不到位置,
         // 不必白等 90 秒再报一个错的原因
         if (!fromForeground && !Perms.backgroundLocation(this)) {
+            recordAttempt(slot, "needs_always", "需要「始终允许」定位")
             remindOnce(decision.date, slot, "bg", BG_TITLE, BG_TEXT)
             stopIfIdle()
             return START_NOT_STICKY
@@ -290,7 +301,8 @@ class PunchService : Service() {
                 val db = PunchDb.get(app)
                 val accuracy = if (location.hasAccuracy()) location.accuracy.toDouble() else null
                 val candidates = Cities.get(app).nearestByCity(location.latitude, location.longitude, 3)
-                val prev = db.latestAnchorPunch()?.let { anchor ->
+                // 锚点只取不晚于现在的记录(系统时间被拨到未来时打下的那条不能当锚)
+                val prev = db.latestAnchorPunch(System.currentTimeMillis())?.let { anchor ->
                     val key = db.overrideFor(anchor.localDate)?.cityKey ?: anchor.cityKey
                     CityResolver.Prev(
                         cityKey = key,
@@ -318,14 +330,20 @@ class PunchService : Service() {
                         fromCache = fromCache,
                         viaContext = resolution?.viaContext == true,
                     )
-                    if (db.insertPunch(punch)) saved = true
+                    if (db.insertPunch(punch)) {
+                        saved = true
+                        recordAttempt(d.slot, "ok", punch.cityName + if (fromCache) " · 缓存位置" else "")
+                    }
                 }
                 if (saved) {
                     TernDaysWidgetProvider.updateAll(app)
                     DataBus.bump()
+                    // 天数变了:看看有没有阈值接近 / 达到(同一窗口期只提醒一次)
+                    runCatching { ThresholdAlerts.check(app) }
                 }
             } catch (_: Exception) {
                 // 落库线程不允许把整个进程带崩;失败提醒用户
+                decisions.firstOrNull()?.let { recordAttempt(it.slot, "failed", "保存失败") }
                 runCatching { notifyRemind("打卡保存失败", FAIL_TEXT) }
             } finally {
                 handler.post {
@@ -350,14 +368,33 @@ class PunchService : Service() {
 
     private fun onFailed(d: Decision, failure: Failure) {
         when (failure) {
-            Failure.LOCATION_OFF -> remindOnce(d.date, d.slot, "off", OFF_TITLE, OFF_TEXT)
-            Failure.PERMISSION -> remindOnce(d.date, d.slot, "perm", PERM_TITLE, PERM_TEXT)
+            Failure.LOCATION_OFF -> {
+                recordAttempt(d.slot, "location_off", "系统定位服务已关闭")
+                remindOnce(d.date, d.slot, "off", OFF_TITLE, OFF_TEXT, punchAction = true)
+            }
+            Failure.PERMISSION -> {
+                recordAttempt(d.slot, "permission", "缺定位权限")
+                remindOnce(d.date, d.slot, "perm", PERM_TITLE, PERM_TEXT)
+            }
             Failure.NO_FIX -> {
                 // 窗口内还有时间且这次不是重试:10 分钟后自己再试一次(只一次)
-                if (!PunchScheduler.scheduleRetry(this, d.date, d.slot, d.isRetry)) {
-                    remindOnce(d.date, d.slot, "fail", "${slotLabel(d.slot)}打卡失败", FAIL_TEXT)
+                val retryAt = PunchScheduler.scheduleRetry(this, d.date, d.slot, d.isRetry)
+                recordAttempt(d.slot, "no_fix", "没拿到定位", retryAt)
+                if (retryAt == null) {
+                    remindOnce(d.date, d.slot, "fail", "${slotLabel(d.slot)}打卡失败", FAIL_TEXT, punchAction = true)
                 }
             }
+        }
+    }
+
+    /** 今日卡片的「最近一次尝试」 */
+    private fun recordAttempt(slot: Slot?, result: String, detail: String, retryAtMs: Long? = null) {
+        runCatching {
+            Prefs.setLastAttempt(
+                applicationContext,
+                Prefs.Attempt(System.currentTimeMillis(), slot?.name ?: "", result, detail, retryAtMs),
+            )
+            DataBus.bump()
         }
     }
 
@@ -394,24 +431,18 @@ class PunchService : Service() {
     /**
      * 同一天同一时段同一类原因只提醒一次:此前定位总开关关着时每 10 分钟响一次铃。
      */
-    private fun remindOnce(date: LocalDate, slot: Slot?, kind: String, title: String, text: String) {
+    private fun remindOnce(
+        date: LocalDate, slot: Slot?, kind: String, title: String, text: String, punchAction: Boolean = false,
+    ) {
         val key = "$date|${slot?.name ?: "-"}|$kind"
         if (Prefs.lastRemindKey(this) == key) return
         Prefs.setLastRemindKey(this, key)
-        notifyRemind(title, text)
+        notifyRemind(title, text, punchAction)
     }
 
-    private fun notifyRemind(title: String, text: String) {
-        val n = NotificationCompat.Builder(this, TernDaysApp.CHANNEL_REMIND)
-            .setSmallIcon(R.drawable.ic_stat_tern)
-            .setContentTitle(title)
-            .setContentText(text)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setContentIntent(Intents.openApp(this))
-            .setOnlyAlertOnce(true)
-            .setAutoCancel(true)
-            .build()
-        getSystemService(NotificationManager::class.java).notify(NOTIF_REMIND_ID, n)
+    private fun notifyRemind(title: String, text: String, punchAction: Boolean = false) {
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTIF_REMIND_ID, remindNotification(this, title, text, punchAction))
     }
 
     companion object {
@@ -438,6 +469,32 @@ class PunchService : Service() {
         private const val FAIL_TEXT = "没拿到定位。打开应用会立即补打；已过窗口的日子可在首页点「纠正」手动指定城市"
         private const val LATE_TEXT = "系统把这次打卡推迟到了窗口之外。打开应用可查看，可在首页点「纠正」手动指定城市"
 
+        /**
+         * 失败提醒。punchAction:带一个「立即打卡」按钮——从通知交互启动的前台服务
+         * 不受后台启动限制,也能拿到「仅使用期间」的定位,应用被杀之后也能一键补上。
+         */
+        private fun remindNotification(context: Context, title: String, text: String, punchAction: Boolean): Notification {
+            val b = NotificationCompat.Builder(context, TernDaysApp.CHANNEL_REMIND)
+                .setSmallIcon(R.drawable.ic_stat_tern)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+                .setContentIntent(Intents.openApp(context))
+                .setOnlyAlertOnce(true)
+                .setAutoCancel(true)
+            if (punchAction) {
+                val intent = Intent(context, PunchService::class.java).putExtra(EXTRA_FOREGROUND, true)
+                val pi = PendingIntent.getForegroundService(
+                    context, REQUEST_PUNCH_NOW, intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+                b.addAction(0, "立即打卡", pi)
+            }
+            return b.build()
+        }
+
+        private const val REQUEST_PUNCH_NOW = 3001
+
         private fun slotLabel(slot: Slot) = when (slot) {
             Slot.MORNING -> "早上 7 点"
             Slot.EVENING -> "下午 5 点"
@@ -449,21 +506,21 @@ class PunchService : Service() {
             if (slot != null) intent.putExtra(PunchScheduler.EXTRA_SLOT, slot.name)
             if (isRetry) intent.putExtra(PunchScheduler.EXTRA_RETRY, true)
             if (fromForeground) intent.putExtra(EXTRA_FOREGROUND, true)
+            if (Prefs.punchPaused(context)) return
             try {
                 ContextCompat.startForegroundService(context, intent)
             } catch (_: Exception) {
-                // 后台前台服务被系统限制（常见于国产 ROM）：退化为提醒
-                val nm = context.getSystemService(NotificationManager::class.java)
-                nm.notify(
+                // 后台前台服务被系统限制（常见于国产 ROM）：退化为提醒,并给「立即打卡」按钮
+                Prefs.setLastAttempt(
+                    context,
+                    Prefs.Attempt(System.currentTimeMillis(), slot?.name ?: "", "blocked", "被系统拦下了", null),
+                )
+                context.getSystemService(NotificationManager::class.java).notify(
                     NOTIF_REMIND_ID,
-                    NotificationCompat.Builder(context, TernDaysApp.CHANNEL_REMIND)
-                        .setSmallIcon(R.drawable.ic_stat_tern)
-                        .setContentTitle("打卡被系统拦下了")
-                        .setContentText("点这里打开应用完成打卡，并在设置中开启自启动/后台运行")
-                        .setContentIntent(Intents.openApp(context))
-                        .setOnlyAlertOnce(true)
-                        .setAutoCancel(true)
-                        .build(),
+                    remindNotification(
+                        context, "打卡被系统拦下了",
+                        "点「立即打卡」完成这次记录，并在设置中开启自启动 / 后台运行", punchAction = true,
+                    ),
                 )
             }
         }
@@ -476,7 +533,7 @@ class PunchService : Service() {
          * @param fromForeground 用户打开应用时为 true(「仅使用期间」的定位也能用)
          */
         fun maybeBackfill(context: Context, fromForeground: Boolean = false) {
-            if (!Prefs.onboardingDone(context)) return
+            if (!Prefs.onboardingDone(context) || Prefs.punchPaused(context)) return
             val app = context.applicationContext
             // DB 查询(首次含建库)不占主线程
             Thread {

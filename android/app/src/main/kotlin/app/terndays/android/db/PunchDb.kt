@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import app.terndays.core.Anchors
 import app.terndays.core.CityMatcher
 import app.terndays.core.DayOverride
 import app.terndays.core.HistoryReplay
@@ -139,9 +140,54 @@ class PunchDb private constructor(context: Context) :
      * 被连续性/误差圈粘住的点不作锚,36h 上限才能真正限制整条粘滞链。
      * 若锚点当日已被手动更正,调用方应以更正城市为准(见 [overrideFor])。
      */
-    fun latestAnchorPunch(): Punch? =
-        queryPunches("WHERE city_key != 'unknown' AND via_context = 0 ORDER BY epoch_ms DESC LIMIT 1", null)
-            .firstOrNull()
+    /**
+     * 行程连续性锚点:最近一条解析成功、非改判、且**不晚于现在**的打卡(口径同 :core Anchors.pick)。
+     * 系统时间被拨到未来时打下的记录不能当锚,否则链龄为负、粘滞链永不过期。
+     */
+    fun latestAnchorPunch(nowMs: Long = System.currentTimeMillis()): Punch? =
+        queryPunches(
+            "WHERE city_key != 'unknown' AND via_context = 0 AND epoch_ms <= ? ORDER BY epoch_ms DESC LIMIT 1",
+            arrayOf((nowMs + Anchors.SKEW_MS).toString()),
+        ).firstOrNull()
+
+    /** 打卡时刻晚于现在的记录(系统时间曾被拨到未来),界面提示用户确认或清理。 */
+    fun futurePunches(nowMs: Long = System.currentTimeMillis()): List<Punch> =
+        queryPunches("WHERE epoch_ms > ? ORDER BY epoch_ms", arrayOf((nowMs + Anchors.SKEW_MS).toString()))
+
+    /** 按 (日期, 时段, 时刻) 精确删除若干条打卡。 */
+    fun deletePunches(list: List<Punch>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for (p in list) {
+                db.delete(
+                    "punch", "local_date=? AND slot=? AND epoch_ms=?",
+                    arrayOf(p.localDate.toString(), p.slot.name, p.epochMs.toString()),
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun recordCount(): Int =
+        readableDatabase.rawQuery(
+            "SELECT (SELECT COUNT(*) FROM punch) + (SELECT COUNT(*) FROM day_override)", null,
+        ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+
+    /** 清除本机全部打卡与手动记录(设置 → 数据 → 清除,两次确认之后)。 */
+    fun clearAll() {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("punch", null, null)
+            db.delete("day_override", null, null)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
 
     /** 该日的整天更正(锚点参照只认整天更正;半天更正不整体改写当日城市)。 */
     fun overrideFor(date: LocalDate): DayOverride? =
@@ -236,7 +282,18 @@ class PunchDb private constructor(context: Context) :
         return changed
     }
 
-    data class MergeResult(val punchesAdded: Int, val punchesSkipped: Int, val overridesAdded: Int, val overridesSkipped: Int)
+    /**
+     * @param punchesConflicting / overridesConflicting 跳过的那些里「键相同、城市不同」的条数
+     *   (完全相同的只是重复,不算冲突),结果页据此说明「已保留本机版本」。
+     */
+    data class MergeResult(
+        val punchesAdded: Int,
+        val punchesSkipped: Int,
+        val overridesAdded: Int,
+        val overridesSkipped: Int,
+        val punchesConflicting: Int = 0,
+        val overridesConflicting: Int = 0,
+    )
 
     /**
      * 迁移导入合并:打卡按 (日期, 时段)、手动记录按 (日期, 范围) 去重,本机已有的一律保留;
@@ -249,10 +306,21 @@ class PunchDb private constructor(context: Context) :
         var pSkip = 0
         var oAdd = 0
         var oSkip = 0
+        var pConflict = 0
+        var oConflict = 0
         db.beginTransaction()
         try {
             for (p in punches) {
-                if (insertPunch(p)) pAdd++ else pSkip++
+                if (insertPunch(p)) {
+                    pAdd++
+                } else {
+                    pSkip++
+                    val local = queryPunches(
+                        "WHERE local_date=? AND slot=? ORDER BY epoch_ms LIMIT 1",
+                        arrayOf(p.localDate.toString(), p.slot.name),
+                    ).firstOrNull()
+                    if (local != null && MergeRules.isConflict(local, p)) pConflict++
+                }
             }
             for (o in overrides) {
                 // 按 (日期, 范围) 判定:本机已有的保留,另半天可以补进来,
@@ -268,13 +336,16 @@ class PunchDb private constructor(context: Context) :
                     oAdd++
                 } else {
                     oSkip++
+                    val local = overridesOn(listOf(o.localDate))
+                        .firstOrNull { it.scope == o.scope || it.scope == OverrideScope.FULL || o.scope == OverrideScope.FULL }
+                    if (local != null && MergeRules.isConflict(local, o)) oConflict++
                 }
             }
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
         }
-        return MergeResult(pAdd, pSkip, oAdd, oSkip)
+        return MergeResult(pAdd, pSkip, oAdd, oSkip, pConflict, oConflict)
     }
 
     fun overridesForYear(year: Int): List<DayOverride> =
@@ -317,6 +388,53 @@ class PunchDb private constructor(context: Context) :
                 put("city_name", o.cityName)
             }
             db.insertWithOnConflict("day_override", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** 若干天的全部更正(撤销用的快照)。 */
+    fun overridesOn(dates: Collection<LocalDate>): List<DayOverride> {
+        if (dates.isEmpty()) return emptyList()
+        val marks = dates.joinToString(",") { "?" }
+        return readableDatabase.rawQuery(
+            "SELECT local_date, city_key, city_name, scope FROM day_override WHERE local_date IN ($marks)",
+            dates.map { it.toString() }.toTypedArray(),
+        ).use { c ->
+            val out = ArrayList<DayOverride>(c.count)
+            while (c.moveToNext()) out.add(readOverride(c))
+            out
+        }
+    }
+
+    /** 一次写入多条更正(区间补记):单事务,逐条遵守整天 / 半天互斥(同 [setOverride])。 */
+    fun setOverrides(list: List<DayOverride>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            list.forEach { setOverride(it) }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** 撤销:把这些日期的更正整体换回快照。 */
+    fun replaceOverrides(dates: Collection<LocalDate>, snapshot: List<DayOverride>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            dates.forEach { db.delete("day_override", "local_date=?", arrayOf(it.toString())) }
+            for (o in snapshot) {
+                val values = ContentValues().apply {
+                    put("local_date", o.localDate.toString())
+                    put("scope", o.scope.name)
+                    put("city_key", o.cityKey)
+                    put("city_name", o.cityName)
+                }
+                db.insertWithOnConflict("day_override", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+            }
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()

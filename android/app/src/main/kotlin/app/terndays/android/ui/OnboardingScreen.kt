@@ -109,7 +109,7 @@ fun OnboardingScreen(onDone: () -> Unit) {
             Modifier.align(Alignment.CenterHorizontally).offset(y = (-16).dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            TimeChip(R.drawable.ic_sun, Color(0xFFA9762F), "07:00")
+            TimeChip(R.drawable.ic_sun, Td.Sunrise, "07:00")
             TimeChip(R.drawable.ic_sunset, Td.Muted, "17:00")
         }
         Spacer(Modifier.height(10.dp))
@@ -149,6 +149,16 @@ fun OnboardingScreen(onDone: () -> Unit) {
                     done = null,
                 )
             }
+        }
+
+        // 只给了「大致位置」:能打卡,但边界城市(深圳 / 香港)可能判错,弱提示一句
+        if (Perms.anyLocation(context) && !Perms.fineLocation(context)) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "当前只允许「大致位置」，城市交界处可能判错。可在系统设置里改为「精确位置」。",
+                fontSize = 12.sp, color = Td.WarmDeep, textAlign = TextAlign.Center, lineHeight = 18.sp,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+            )
         }
 
         Spacer(Modifier.height(24.dp))

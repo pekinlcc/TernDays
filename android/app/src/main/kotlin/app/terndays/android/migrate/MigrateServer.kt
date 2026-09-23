@@ -29,6 +29,8 @@ class MigrateServer(
     private val stopped = AtomicBoolean(false)
     private val finished = AtomicBoolean(false)
     @Volatile private var serverSocket: ServerSocket? = null
+    @Volatile private var key: ByteArray? = null
+    @Volatile private var lastAddresses: List<String> = emptyList()
     private var thread: Thread? = null
 
     fun start() {
@@ -51,6 +53,8 @@ class MigrateServer(
                     return@Thread
                 }
                 val server = ServerSocket(0).also { serverSocket = it }
+                this.key = key
+                lastAddresses = addresses
                 onReady(MigrationLink.build(addresses, server.localPort, key))
 
                 while (!stopped.get() && !finished.get()) {
@@ -106,6 +110,20 @@ class MigrateServer(
         } finally {
             runCatching { socket.close() }
         }
+    }
+
+    /**
+     * 网络变了(换了 Wi-Fi、开了热点):监听绑在全部网卡上,不必重启服务,
+     * 用同一个密钥和端口按新地址重新出码即可(新手机扫旧码也仍然连得上还在的那个地址)。
+     */
+    fun refreshAddresses() {
+        val k = key ?: return
+        val port = serverSocket?.takeIf { !it.isClosed }?.localPort ?: return
+        if (stopped.get() || finished.get()) return
+        val addresses = siteLocalAddresses()
+        if (addresses.isEmpty() || addresses == lastAddresses) return
+        lastAddresses = addresses
+        onReady(MigrationLink.build(addresses, port, k))
     }
 
     fun stop() {

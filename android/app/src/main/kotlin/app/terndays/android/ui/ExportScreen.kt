@@ -54,6 +54,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import androidx.compose.foundation.selection.selectableGroup
+import app.terndays.core.Thresholds
+import java.time.LocalDate
 
 @Composable
 fun ExportScreen(initialYear: Int, onBack: () -> Unit) {
@@ -63,37 +66,71 @@ fun ExportScreen(initialYear: Int, onBack: () -> Unit) {
     var useXlsx by rememberSaveable { mutableStateOf(true) }
     var incSummary by rememberSaveable { mutableStateOf(true) }
     var incDaily by rememberSaveable { mutableStateOf(true) }
+    var incStays by rememberSaveable { mutableStateOf(false) }
+    // 导出范围:按自然年 / 最近 180 天(滚动) / 自定义区间
+    var mode by rememberSaveable { mutableStateOf(RangeMode.YEAR) }
+    val today = LocalDate.now()
+    var customFrom by rememberSaveable { mutableStateOf(today.withDayOfYear(1)) }
+    var customTo by rememberSaveable { mutableStateOf(today) }
+    var picking by remember { mutableStateOf<String?>(null) }
     // 不能用 rememberSaveable:旋转屏幕会把「正在生成」状态复活,按钮永久卡死
     var busy by remember { mutableStateOf(false) }
 
     // 与首页同一读取入口:打卡 / 更正后(DataBus)预览与导出内容自动跟上
-    val load = rememberYearData(year)
+    val yearLoad = rememberYearData(year)
+    val range: Pair<LocalDate, LocalDate>? = when (mode) {
+        RangeMode.YEAR -> null
+        RangeMode.ROLLING -> Thresholds.range(Thresholds.Window.ROLLING_180, today)
+        RangeMode.CUSTOM -> customFrom to customTo
+    }
+    val rangeLoad = rememberRangeData(range)
+    val load = if (mode == RangeMode.YEAR) yearLoad else rangeLoad
     val data = load.data
     // 没选任何内容、数据还没读到时按钮置灰,文案说清原因
-    val canExport = !busy && data != null && (incSummary || incDaily)
+    val canExport = !busy && data != null && (incSummary || incDaily || incStays)
 
     Column(Modifier.fillMaxSize().background(Td.Bg).statusBarsPadding().padding(horizontal = 20.dp)) {
         Spacer(Modifier.height(10.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconSquare(R.drawable.ic_chev_left, "返回") { onBack() }
-            Text(
-                "导出数据", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Td.Ink,
-                modifier = Modifier.weight(1f), textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.width(36.dp))
-        }
+        ScreenHeader("导出数据", onBack)
         Spacer(Modifier.height(12.dp))
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.weight(1f)) {
             if (load.failed) item { LoadErrorCard(load.retry) }
             item { SectionLabel("导出范围") }
             item {
+                Row(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ScopeChip("按年", mode == RangeMode.YEAR) { mode = RangeMode.YEAR }
+                    ScopeChip("最近 180 天", mode == RangeMode.ROLLING) { mode = RangeMode.ROLLING }
+                    ScopeChip("自定义", mode == RangeMode.CUSTOM) { mode = RangeMode.CUSTOM }
+                }
+            }
+            if (mode == RangeMode.CUSTOM) {
+                item {
+                    TdCard(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(horizontal = 16.dp)) {
+                            DateRow("开始", customFrom) { picking = "from" }
+                            HorizontalDivider(color = Td.Divider, thickness = 1.dp)
+                            DateRow("结束", customTo) { picking = "to" }
+                        }
+                    }
+                }
+            }
+            if (mode == RangeMode.ROLLING) {
+                item {
+                    val (f, t) = Thresholds.range(Thresholds.Window.ROLLING_180, today)
+                    Text(
+                        "${f} 至 ${t}（含今天，共 180 天）", fontSize = 12.sp, color = Td.Muted,
+                        modifier = Modifier.padding(start = 2.dp),
+                    )
+                }
+            }
+            if (mode == RangeMode.YEAR) item {
                 // 年份多了要能横向滚动,不然早期年份点不到
                 Row(
                     Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    (data?.years ?: listOf(year)).forEach { y ->
+                    (yearLoad.data?.years ?: listOf(year)).forEach { y ->
                         val selected = y == year
                         Row(
                             Modifier.clip(RoundedCornerShape(12.dp))
@@ -129,7 +166,9 @@ fun ExportScreen(initialYear: Int, onBack: () -> Unit) {
                     Column(Modifier.padding(horizontal = 16.dp)) {
                         CheckRow("城市汇总", "每个城市的累计天数", incSummary) { incSummary = it }
                         HorizontalDivider(color = Td.Divider, thickness = 1.dp)
-                        CheckRow("每日明细", "每天早 / 晚打卡的时间、城市与计天结果", incDaily) { incDaily = it }
+                        CheckRow("每日明细", "每天早 / 晚打卡的时间、城市、时区与计天结果", incDaily) { incDaily = it }
+                        HorizontalDivider(color = Td.Divider, thickness = 1.dp)
+                        CheckRow("行程段", "同城连续的日子合成一段：城市、起止日期、天数", incStays) { incStays = it }
                     }
                 }
             }
@@ -172,7 +211,7 @@ fun ExportScreen(initialYear: Int, onBack: () -> Unit) {
                         scope.launch {
                             try {
                                 // 导出的就是页面上预览的这一份,不再另读一次
-                                shareExport(context, snapshot, useXlsx, incSummary, incDaily)
+                                shareExport(context, snapshot, mode != RangeMode.YEAR, useXlsx, incSummary, incDaily, incStays)
                             } catch (e: Exception) {
                                 Toast.makeText(context, "导出失败：${e.message}", Toast.LENGTH_LONG).show()
                             } finally {
@@ -188,7 +227,7 @@ fun ExportScreen(initialYear: Int, onBack: () -> Unit) {
                     Text(
                         when {
                             busy -> "正在生成…"
-                            !incSummary && !incDaily -> "请至少选择一项导出内容"
+                            !incSummary && !incDaily && !incStays -> "请至少选择一项导出内容"
                             data == null -> "正在读取…"
                             else -> "生成文件并分享"
                         },
@@ -202,6 +241,19 @@ fun ExportScreen(initialYear: Int, onBack: () -> Unit) {
                 fontSize = 11.sp, color = Td.Faint, textAlign = TextAlign.Center, lineHeight = 17.sp,
                 modifier = Modifier.fillMaxWidth(),
             )
+        }
+    }
+
+    picking?.let { which ->
+        DatePick(initial = if (which == "from") customFrom else customTo, max = today, onDismiss = { picking = null }) { d ->
+            picking = null
+            if (which == "from") {
+                customFrom = d
+                if (customTo.isBefore(d)) customTo = d
+            } else {
+                customTo = d
+                if (customFrom.isAfter(d)) customFrom = d
+            }
         }
     }
 }
@@ -280,24 +332,28 @@ private fun PreviewRow(cells: List<String>, header: Boolean = false) {
     }
 }
 
+private enum class RangeMode { YEAR, ROLLING, CUSTOM }
+
 private suspend fun shareExport(
     context: Context,
     data: YearData,
+    isRange: Boolean,
     useXlsx: Boolean,
     incSummary: Boolean,
     incDaily: Boolean,
+    incStays: Boolean,
 ) {
-    val year = data.stats.year
+    val name = if (isRange) "${data.stats.firstDate}至${data.stats.lastDate}" else data.stats.year.toString()
     val uri = withContext(Dispatchers.IO) {
         val now = java.time.LocalDateTime.now()
         val dir = File(context.cacheDir, "exports").apply { mkdirs() }
         val file: File
         if (useXlsx) {
-            file = File(dir, "TernDays-$year.xlsx")
-            file.writeBytes(Exporter.exportXlsx(data.stats, data.punches, incSummary, incDaily, now))
+            file = File(dir, "TernDays-$name.xlsx")
+            file.writeBytes(Exporter.exportXlsx(data.stats, data.punches, incSummary, incDaily, now, incStays))
         } else {
-            file = File(dir, "TernDays-$year.csv")
-            file.writeText(Exporter.exportCsv(data.stats, data.punches, incSummary, incDaily, now))
+            file = File(dir, "TernDays-$name.csv")
+            file.writeText(Exporter.exportCsv(data.stats, data.punches, incSummary, incDaily, now, incStays))
         }
         FileProvider.getUriForFile(context, context.packageName + ".files", file)
     }

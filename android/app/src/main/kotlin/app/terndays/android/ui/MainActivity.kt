@@ -6,8 +6,10 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -18,6 +20,7 @@ import app.terndays.android.Prefs
 import app.terndays.android.geo.Cities
 import app.terndays.android.punch.PunchScheduler
 import app.terndays.android.punch.PunchService
+import app.terndays.android.punch.ThresholdAlerts
 import app.terndays.android.widget.TernDaysWidgetProvider
 
 class MainActivity : ComponentActivity() {
@@ -38,6 +41,9 @@ class MainActivity : ComponentActivity() {
             PunchService.maybeBackfill(this, fromForeground = true)
             // 改了系统字号 / 时区后回到应用,小组件按新条件重排(行数阈值随字号变)
             TernDaysWidgetProvider.updateAll(this)
+            // 手动补记 / 恢复备份之后也要检查阈值(打卡落库时另有一次)
+            val app = applicationContext
+            Thread { runCatching { ThresholdAlerts.check(app) } }.apply { isDaemon = true }.start()
             Cities.reResolveHistoryIfNeeded(this) { changed ->
                 runOnUiThread {
                     Toast.makeText(this, "城市库已更新，自动修正了 $changed 条历史记录", Toast.LENGTH_LONG).show()
@@ -53,6 +59,7 @@ private fun AppRoot() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val start = if (Prefs.onboardingDone(context)) "home" else "onboarding"
 
+    Box(Modifier.fillMaxSize()) {
     NavHost(
         navController = nav,
         startDestination = start,
@@ -73,7 +80,7 @@ private fun AppRoot() {
                 onOpenCity = { key, year -> nav.navigate("city/${Uri.encode(key)}/$year") },
                 onExport = { year -> nav.navigate("export/$year") },
                 onSettings = { nav.navigate("settings") },
-                onBackfill = { year -> nav.navigate("settings?year=$year") },
+                onBackfill = { year -> nav.navigate("settings?year=$year&backfill=true") },
             )
         }
         composable(
@@ -100,11 +107,15 @@ private fun AppRoot() {
             )
         }
         composable(
-            "settings?year={year}",
-            arguments = listOf(navArgument("year") { type = NavType.IntType; defaultValue = -1 }),
+            "settings?year={year}&backfill={backfill}",
+            arguments = listOf(
+                navArgument("year") { type = NavType.IntType; defaultValue = -1 },
+                navArgument("backfill") { type = NavType.BoolType; defaultValue = false },
+            ),
         ) { entry ->
             SettingsScreen(
                 initialYear = entry.arguments?.getInt("year")?.takeIf { it > 0 },
+                openBackfill = entry.arguments?.getBoolean("backfill") == true,
                 onBack = { nav.popBackStack() },
                 onMigrate = { nav.navigate("migrate") },
             )
@@ -112,5 +123,8 @@ private fun AppRoot() {
         composable("migrate") {
             MigrateSendScreen(onBack = { nav.popBackStack() })
         }
+    }
+    // 更正 / 补记 / 备份等操作的轻提示与「撤销」,浮在所有页面之上
+    UndoHost(Modifier.align(Alignment.BottomCenter))
     }
 }
