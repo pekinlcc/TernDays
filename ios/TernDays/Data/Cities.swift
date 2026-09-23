@@ -27,6 +27,8 @@ enum Cities {
         let defaults = UserDefaults(suiteName: AppGroup.id) ?? .standard
         let key = "dataset_version_resolved"
         guard defaults.integer(forKey: key) < datasetVersion else { return }
+        // 数据被封存(锁屏冷启动读不到)时不重放也不记版本:否则这次升级的修正永远不会再跑
+        guard !DataStore.shared.isSealed else { return }
         lock.lock()
         if remapping {
             lock.unlock()
@@ -36,7 +38,7 @@ enum Cities {
         lock.unlock()
         DispatchQueue.global(qos: .utility).async {
             let changed = HistoryReplay.replayAll(store: DataStore.shared, matcher: matcher)
-            defaults.set(datasetVersion, forKey: key)
+            if !DataStore.shared.isSealed { defaults.set(datasetVersion, forKey: key) }
             lock.lock()
             remapping = false
             lock.unlock()

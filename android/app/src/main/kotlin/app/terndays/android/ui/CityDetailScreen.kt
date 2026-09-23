@@ -26,7 +26,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -39,29 +38,31 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.terndays.android.DataBus
 import app.terndays.android.R
-import app.terndays.android.db.PunchDb
-import app.terndays.android.widget.TernDaysWidgetProvider
 import app.terndays.core.DayCounting
 import app.terndays.core.DayOverride
+import app.terndays.core.Fmt
 import app.terndays.core.Punch
 import app.terndays.core.Slot
 import java.time.LocalDate
 import java.time.YearMonth
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.semantics.Role
+import kotlinx.coroutines.launch
 
-private data class CityDay(val weight: Double, val manual: Boolean)
+/** manual:这座城市这天的份额来自手动更正;provisional:进行中的今天,先算半天 */
+private data class CityDay(val weight: Double, val manual: Boolean, val provisional: Boolean)
 
 @Composable
 fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
     val context = LocalContext.current
-    var tick by remember { mutableIntStateOf(0) }
-    val dataVersion = DataBus.version.intValue
-    val data by produceState<YearData?>(initialValue = null, cityKey, year, tick, dataVersion) {
-        value = loadYearData(context, year)
-    }
-    val d = data
-    var correcting by remember { mutableStateOf<LocalDate?>(null) }
+    // 写库后 DataBus 会触发重读,不再需要本地 tick
+    val load = rememberYearData(year, cityKey)
+    val d = load.data
+    val scope = rememberCoroutineScope()
+    // 旋转 / 切深浅色不丢正在更正的那一天和当前月份
+    var correcting by rememberSaveable { mutableStateOf<LocalDate?>(null) }
 
     // 该城市在本年已无任何记录(如最后一天被更正走):自动返回列表,不停留在空页
     LaunchedEffect(d) {
@@ -70,13 +71,21 @@ fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
 
     val cityDays: Map<LocalDate, CityDay> = remember(d) {
         d?.stats?.days?.mapNotNull { (date, attr) ->
-            attr.shares.firstOrNull { it.cityKey == cityKey }?.let { date to CityDay(it.weight, attr.manual) }
+            attr.shares.firstOrNull { it.cityKey == cityKey }
+                ?.let { date to CityDay(it.weight, it.manual, attr.provisional) }
         }?.toMap() ?: emptyMap()
     }
+    // 月历上别的日子也要画出来:记在其他城市的淡底,开始记录之后的无记录日空心描边
+    val today = LocalDate.now()
+    val otherDays: Set<LocalDate> = remember(d) {
+        d?.stats?.days?.filter { (_, a) -> a.shares.isNotEmpty() && a.shares.none { it.cityKey == cityKey } }
+            ?.keys ?: emptySet()
+    }
+    val missingDays: Set<LocalDate> = remember(d) { d?.stats?.unrecordedDates?.toSet() ?: emptySet() }
     val stat = d?.stats?.cities?.firstOrNull { it.cityKey == cityKey }
     val cityName = stat?.cityName ?: ""
 
-    var month by remember { mutableIntStateOf(0) }
+    var month by rememberSaveable { mutableIntStateOf(0) }
     LaunchedEffect(d) {
         if (month == 0 && d != null) {
             month = cityDays.keys.maxOrNull()?.monthValue
@@ -88,17 +97,11 @@ fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
 
     Column(Modifier.fillMaxSize().background(Td.Bg).statusBarsPadding().padding(horizontal = 20.dp)) {
         Spacer(Modifier.height(10.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconSquare(R.drawable.ic_chev_left, "返回") { onBack() }
-            Text(
-                cityName, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Td.Ink,
-                modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            )
-            Spacer(Modifier.width(36.dp))
-        }
+        ScreenHeader(cityName, onBack)
         Spacer(Modifier.height(12.dp))
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxSize()) {
+            if (load.failed) item { LoadErrorCard(load.retry) }
             item {
                 Row(Modifier.padding(horizontal = 2.dp), verticalAlignment = Alignment.Bottom) {
                     Text(
@@ -118,6 +121,7 @@ fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
                 if (month != 0) {
                     CalendarCard(
                         year = year, month = month, cityDays = cityDays,
+                        otherDays = otherDays, missingDays = missingDays, today = today,
                         onPrev = { if (month > 1) month-- },
                         onNext = { if (month < 12) month++ },
                         onDayClick = { correcting = it },
@@ -145,26 +149,30 @@ fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
         CityCorrectDialog(
             date = target,
             currentCityName = current?.shares?.joinToString(" + ") { it.cityName },
-            recentCities = d?.stats?.cities?.map { it.cityKey to it.cityName } ?: emptyList(),
-            hasBothHalves = DayCounting.halfSampleFlags(
+            // 在城市详情里点开的:本城排第一
+            recentCities = listOf(cityKey to cityName).filter { it.second.isNotEmpty() } +
+                (d?.stats?.cities?.map { it.cityKey to it.cityName } ?: emptyList()),
+            allowHalfScope = DayCounting.halfSampleFlags(
                 dayPunches.firstOrNull { it.slot == Slot.MORNING },
                 dayPunches.firstOrNull { it.slot == Slot.EVENING },
                 dayPunches.firstOrNull { it.slot == Slot.EXTRA },
-            ).let { it.first || it.second },
+            ).let { it.first || it.second } || (target == today && java.time.LocalTime.now().hour >= 12),
             existing = d?.overrides?.filter { it.localDate == target } ?: emptyList(),
+            hasPunches = dayPunches.isNotEmpty(),
             onDismiss = { correcting = null },
-            onPick = { key, name, scope ->
-                PunchDb.get(context).setOverride(DayOverride(target, key, name, scope))
-                TernDaysWidgetProvider.updateAll(context)
+            onPick = { key, name, scope0 ->
                 correcting = null
-                tick++
+                Corrections.scope.launch {
+                    Corrections.apply(
+                        context, listOf(DayOverride(target, key, name, scope0)),
+                        "${Fmt.monthDay(target)} 已改为 $name",
+                    )
+                }
             },
             onRestoreAuto = if (d?.overrides?.any { it.localDate == target } == true) {
                 {
-                    PunchDb.get(context).removeOverride(target)
-                    TernDaysWidgetProvider.updateAll(context)
                     correcting = null
-                    tick++
+                    Corrections.scope.launch { Corrections.restoreAuto(context, target) }
                 }
             } else {
                 null
@@ -178,6 +186,9 @@ private fun CalendarCard(
     year: Int,
     month: Int,
     cityDays: Map<LocalDate, CityDay>,
+    otherDays: Set<LocalDate>,
+    missingDays: Set<LocalDate>,
+    today: LocalDate,
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onDayClick: (LocalDate) -> Unit,
@@ -224,49 +235,72 @@ private fun CalendarCard(
             cells.chunked(7).forEach { week ->
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     week.forEach { date ->
-                        DayCell(date, date?.let { cityDays[it] }, Modifier.weight(1f), onDayClick)
+                        DayCell(
+                            date, date?.let { cityDays[it] },
+                            other = date != null && date in otherDays,
+                            missing = date != null && date in missingDays,
+                            // 过去的每一天都能点:补记 / 改到本城,不必先回设置页
+                            clickable = date != null && !date.isAfter(today),
+                            modifier = Modifier.weight(1f), onClick = onDayClick,
+                        )
                     }
                     repeat(7 - week.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                LegendSwatch(full = true)
-                Spacer(Modifier.width(6.dp))
-                Text("全天", fontSize = 11.sp, color = Td.Muted)
-                Spacer(Modifier.width(14.dp))
-                LegendSwatch(full = false)
-                Spacer(Modifier.width(6.dp))
-                Text("半天", fontSize = 11.sp, color = Td.Muted)
+                Legend(LegendKind.FULL, "全天")
+                Legend(LegendKind.HALF, "半天")
+                Legend(LegendKind.PROVISIONAL, "进行中")
                 Spacer(Modifier.weight(1f))
                 Text(
                     "本月 ${DayCounting.formatDays(monthSum)} 天",
                     fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Td.AccentDeep,
                 )
             }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Legend(LegendKind.OTHER, "其他城市")
+                Legend(LegendKind.MISSING, "无记录")
+            }
         }
     }
 }
 
+/** 半天:左上三角填色(与导出、iOS 同一个视觉语言) */
+private fun Modifier.halfFill(color: androidx.compose.ui.graphics.Color, shape: RoundedCornerShape) =
+    clip(shape).border(1.dp, color, shape).drawBehind {
+        val p = Path().apply {
+            moveTo(0f, 0f)
+            lineTo(size.width, 0f)
+            lineTo(0f, size.height)
+            close()
+        }
+        drawPath(p, color)
+    }
+
 @Composable
-private fun DayCell(date: LocalDate?, day: CityDay?, modifier: Modifier, onClick: (LocalDate) -> Unit) {
+private fun DayCell(
+    date: LocalDate?,
+    day: CityDay?,
+    other: Boolean,
+    missing: Boolean,
+    clickable: Boolean,
+    modifier: Modifier,
+    onClick: (LocalDate) -> Unit,
+) {
     val shape = RoundedCornerShape(10.dp)
-    val base = if (date != null && day != null) {
-        modifier.height(42.dp).clip(shape).clickable { onClick(date) }
+    val base = if (date != null && clickable) {
+        modifier.height(42.dp).clip(shape).clickable(role = Role.Button) { onClick(date) }
     } else {
         modifier.height(42.dp)
     }
     val styled = when {
-        date == null || day == null -> base
-        day.weight >= 1.0 -> base.clip(shape).background(Td.AccentSoft)
-        else -> base.clip(shape).border(1.dp, Td.AccentSoft, shape).drawBehind {
-            val p = Path().apply {
-                moveTo(0f, 0f)
-                lineTo(size.width, 0f)
-                lineTo(0f, size.height)
-                close()
-            }
-            drawPath(p, Td.AccentSoft)
-        }
+        date == null -> base
+        day != null && day.provisional -> base.halfFill(Td.WarmSoft, shape)
+        day != null && day.weight >= 1.0 -> base.clip(shape).background(Td.AccentSoft)
+        day != null -> base.halfFill(Td.AccentSoft, shape)
+        other -> base.clip(shape).background(Td.NeutralSoft)
+        missing -> base.clip(shape).border(1.dp, Td.Border, shape)
+        else -> base
     }
     Box(styled, contentAlignment = Alignment.Center) {
         if (date != null) {
@@ -276,6 +310,7 @@ private fun DayCell(date: LocalDate?, day: CityDay?, modifier: Modifier, onClick
                 fontWeight = if (day != null) FontWeight.SemiBold else FontWeight.Normal,
                 color = when {
                     day == null -> Td.Faint
+                    day.provisional -> Td.WarmDeep
                     day.weight >= 1.0 -> Td.AccentDeep
                     else -> Td.Ink
                 },
@@ -284,25 +319,22 @@ private fun DayCell(date: LocalDate?, day: CityDay?, modifier: Modifier, onClick
     }
 }
 
+private enum class LegendKind { FULL, HALF, PROVISIONAL, OTHER, MISSING }
+
 @Composable
-private fun LegendSwatch(full: Boolean) {
+private fun Legend(kind: LegendKind, label: String) {
     val shape = RoundedCornerShape(4.dp)
     val m = Modifier.size(14.dp)
-    if (full) {
-        Box(m.clip(shape).background(Td.AccentSoft))
-    } else {
-        Box(
-            m.clip(shape).border(1.dp, Td.AccentSoft, shape).drawBehind {
-                val p = Path().apply {
-                    moveTo(0f, 0f)
-                    lineTo(size.width, 0f)
-                    lineTo(0f, size.height)
-                    close()
-                }
-                drawPath(p, Td.AccentSoft)
-            },
-        )
+    when (kind) {
+        LegendKind.FULL -> Box(m.clip(shape).background(Td.AccentSoft))
+        LegendKind.HALF -> Box(m.halfFill(Td.AccentSoft, shape))
+        LegendKind.PROVISIONAL -> Box(m.halfFill(Td.WarmSoft, shape))
+        LegendKind.OTHER -> Box(m.clip(shape).background(Td.NeutralSoft))
+        LegendKind.MISSING -> Box(m.clip(shape).border(1.dp, Td.Border, shape))
     }
+    Spacer(Modifier.width(5.dp))
+    Text(label, fontSize = 11.sp, color = Td.Muted)
+    Spacer(Modifier.width(12.dp))
 }
 
 @Composable
@@ -334,17 +366,17 @@ private fun DetailListCard(
                 ) {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Text(
-                            "${date.monthValue}月${date.dayOfMonth}日 · ${weekCn(date)}",
+                            "${date.monthValue}月${date.dayOfMonth}日 · ${Fmt.weekdayCn(date)}",
                             fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.Ink,
                         )
                         val detail = listOfNotNull(
-                            m?.let { it.epochMs to "早 ${punchClock(it)} ${it.cityName}" },
-                            e?.let { it.epochMs to "晚 ${punchClock(it)} ${it.cityName}" },
-                            x?.let { it.epochMs to "首 ${punchClock(it)} ${it.cityName}" },
+                            m?.let { it.epochMs to "早 ${Fmt.clock(it)} ${it.cityName}" },
+                            e?.let { it.epochMs to "晚 ${Fmt.clock(it)} ${it.cityName}" },
+                            x?.let { it.epochMs to "首 ${Fmt.clock(it)} ${it.cityName}" },
                         ).sortedBy { it.first }.joinToString(" · ") { it.second }
                         val sub = when {
-                            !day.manual && day.weight < 1.0 && date == LocalDate.now() && listOfNotNull(m, e).size < 2 ->
-                                "$detail · 今天先算半天,另半天打上后补满"
+                            day.provisional -> listOf(detail, "今天先算半天,另半天打上后补满")
+                                .filter { it.isNotEmpty() }.joinToString(" · ")
                             day.manual && detail.isEmpty() -> "手动补记"
                             day.manual -> "已手动更正 · 当天打卡:$detail"
                             detail.isEmpty() -> "无打卡记录"
@@ -352,20 +384,23 @@ private fun DetailListCard(
                         }
                         Text(sub, fontSize = 12.sp, color = Td.Muted)
                     }
-                    // 进行中的今天是"暂时算半天",与跨城日的半天不是一回事,标签要区分
-                    val inProgressToday = !day.manual && day.weight < 1.0 && date == LocalDate.now() &&
-                        listOfNotNull(m, e).size < 2
+                    // 主标签永远说「算了多少」:全天 / 半天 / 进行中(暂时算半天,与跨城日的半天不是一回事);
+                    // 「手动」退为次级角标,且只在这座城市的份额确实来自更正时出现
                     val (label, bg, fg) = when {
-                        day.manual -> Triple("手动", Td.WarmSoft, Td.WarmDeep)
-                        inProgressToday -> Triple("进行中", Td.WarmSoft, Td.WarmDeep)
+                        day.provisional -> Triple("进行中", Td.WarmSoft, Td.WarmDeep)
                         day.weight >= 1.0 -> Triple("全天", Td.AccentSoft, Td.AccentDeep)
                         else -> Triple("半天", Td.AccentSoft, Td.AccentDeep)
                     }
-                    Text(
-                        label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = fg,
-                        modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(bg)
-                            .padding(horizontal = 9.dp, vertical = 3.dp),
-                    )
+                    Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text(
+                            label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = fg,
+                            modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(bg)
+                                .padding(horizontal = 9.dp, vertical = 3.dp),
+                        )
+                        if (day.manual) {
+                            Text("手动", fontSize = 10.sp, color = Td.WarmDeep)
+                        }
+                    }
                 }
             }
         }

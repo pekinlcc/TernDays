@@ -15,7 +15,94 @@ permissions:
   contents: write
 
 jobs:
+  # 纯文本一致性检查:几秒钟就能跑完,放在最前面,不必等 Gradle 跑完才报错
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check version consistency
+        run: |
+          # RELEASE_VERSION / versionName / iOS MARKETING_VERSION 必须一致(v0.5 之前漂移过)
+          [ -f RELEASE_VERSION ] || { echo "::error::缺少 RELEASE_VERSION"; exit 1; }
+          FILE_VER=$(tr -d ' \r\n' < RELEASE_VERSION)
+          case "$FILE_VER" in
+            [0-9]*.[0-9]*) ;;
+            *) echo "::error::RELEASE_VERSION 格式非法: $FILE_VER"; exit 1 ;;
+          esac
+          GRADLE_VER=$(grep -oP 'versionName\s*=\s*"\K[^"]+' android/app/build.gradle.kts)
+          if [ "$FILE_VER" != "$GRADLE_VER" ]; then
+            echo "::error::RELEASE_VERSION($FILE_VER) 与 versionName($GRADLE_VER) 不一致"; exit 1
+          fi
+          PBX=ios/TernDays.xcodeproj/project.pbxproj
+          IOS_VERS=$(grep -oP 'MARKETING_VERSION = \K[^;]+' "$PBX" | sort -u)
+          if [ "$(echo "$IOS_VERS" | wc -l)" != "1" ] || [ "$IOS_VERS" != "$FILE_VER" ]; then
+            echo "::error::iOS MARKETING_VERSION($(echo $IOS_VERS)) 与 RELEASE_VERSION($FILE_VER) 不一致"; exit 1
+          fi
+          BUILDS=$(grep -oP 'CURRENT_PROJECT_VERSION = \K[^;]+' "$PBX" | sort -u | wc -l)
+          [ "$BUILDS" = "1" ] || { echo "::error::iOS 各 target 的 CURRENT_PROJECT_VERSION 不一致"; exit 1; }
+          if [ ! -f "docs/release-notes/v${FILE_VER}.md" ]; then
+            echo "::error::缺少发布说明 docs/release-notes/v${FILE_VER}.md"; exit 1
+          fi
+          echo "version ok: $FILE_VER"
+
+      - name: Check city dataset parity
+        run: |
+          # 两端各带一份城市库,靠人工同步:内容与版本号必须完全一致
+          cmp -s android/app/src/main/assets/cities.tsv ios/TernDays/cities.tsv \
+            || { echo "::error::android 与 ios 的 cities.tsv 不一致"; exit 1; }
+          A=$(grep -oP 'DATASET_VERSION = \K[0-9]+' android/app/src/main/kotlin/app/terndays/android/geo/Cities.kt)
+          I=$(grep -oP 'datasetVersion = \K[0-9]+' ios/TernDays/Data/Cities.swift)
+          [ "$A" = "$I" ] || { echo "::error::城市库版本号不一致:Android $A / iOS $I"; exit 1; }
+          echo "dataset ok: v$A"
+
+      - name: Check widget layouts are generated
+        run: |
+          # 三种外观 + 预览共 4 份布局由脚本生成,手改会漂移
+          python3 tools/gen_widget_layouts.py
+          git diff --exit-code -- android/app/src/main/res/layout/ \
+            || { echo "::error::小组件布局与 tools/gen_widget_layouts.py 的生成结果不一致,请改脚本后重新生成"; exit 1; }
+
+  # iOS 两个 target(应用 + 小组件)在模拟器 SDK 下无签名编译:至少保证能编译过
+  ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Xcode version
+        run: xcodebuild -version
+      # Swift 端的计天 / 导出 / 行程 / 地区与 Android :core 逐项对齐(同一份 fixtures/core-cases.json)。
+      # 只编译纯 Foundation 的 Shared + Core 文件(不含 UIKit/WidgetKit/Network),不属于任何 Xcode target
+      - name: Fixture parity (Swift vs Kotlin :core)
+        run: |
+          swiftc -O -o fixturecheck \
+            ios/Shared/*.swift \
+            ios/TernDays/Core/CityMatcher.swift \
+            ios/TernDays/Core/CityResolver.swift \
+            ios/TernDays/Core/HistoryReplay.swift \
+            ios/TernDays/Core/Regions.swift \
+            ios/TernDays/Core/Exporter.swift \
+            ios/TernDays/Core/Migration.swift \
+            ios/TernDays/Core/Backup.swift \
+            ios/FixtureCheck/main.swift
+          TZ=Asia/Shanghai ./fixturecheck fixtures/core-cases.json
+      - name: Build iOS app + widget (simulator, unsigned)
+        # 对齐检查失败也照样编译:一次 CI 同时报出两边的问题
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          xcodebuild -project ios/TernDays.xcodeproj -alltargets -configuration Debug \
+            -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build 2>&1 \
+            | tee xcodebuild.log | grep -E "error:|\*\* BUILD" || true
+          grep -q "\*\* BUILD SUCCEEDED \*\*" xcodebuild.log
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: xcodebuild.log
+
   build:
+    needs: checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,26 +122,6 @@ jobs:
         working-directory: android
         run: ./gradlew --no-daemon :app:assembleRelease
 
-      - name: Check version consistency
-        run: |
-          # RELEASE_VERSION 必须与 app 的 versionName 一致(v0.5 之前漂移过)
-          [ -f RELEASE_VERSION ] || exit 0
-          FILE_VER=$(tr -d ' \r\n' < RELEASE_VERSION)
-          GRADLE_VER=$(grep -oP 'versionName\s*=\s*"\K[^"]+' android/app/build.gradle.kts)
-          if [ "$FILE_VER" != "$GRADLE_VER" ]; then
-            echo "::error::RELEASE_VERSION($FILE_VER) 与 versionName($GRADLE_VER) 不一致"
-            exit 1
-          fi
-          case "$FILE_VER" in
-            [0-9]*.[0-9]*) ;;
-            *) echo "::error::RELEASE_VERSION 格式非法: $FILE_VER"; exit 1 ;;
-          esac
-          if [ ! -f "docs/release-notes/v${FILE_VER}.md" ]; then
-            echo "::error::缺少发布说明 docs/release-notes/v${FILE_VER}.md"
-            exit 1
-          fi
-          echo "version ok: $FILE_VER"
-
       - name: Resolve version
         id: ver
         run: |
@@ -71,6 +138,10 @@ jobs:
             else
               echo "::warning::查询远端 tag 失败,本次跳过自动发版"
             fi
+          fi
+          # 手动输入与 v* tag 同样受版本一致性约束:不能发一个 APK 里写着别的版本号的 Release
+          if [ -n "$RELEASE" ] && [ "$RELEASE" != "v$(tr -d ' \r\n' < RELEASE_VERSION)" ]; then
+            echo "::error::要发布的 $RELEASE 与 RELEASE_VERSION 不一致"; exit 1
           fi
           VERSION="${RELEASE:-dev-${GITHUB_SHA::7}}"
           echo "release=$RELEASE" >> "$GITHUB_OUTPUT"

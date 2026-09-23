@@ -8,6 +8,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.util.TypedValue
 import android.view.View
 import android.widget.RemoteViews
 import app.terndays.android.R
@@ -23,38 +24,38 @@ import java.time.ZoneId
 /**
  * 2×2 桌面小组件:今年 Top 3 城市及天数,三行等权重(同字号同色)。
  * 不做周期轮询(updatePeriodMillis=0):数据只在打卡时变化,
- * 由打卡 / 补记 / 开机 / 添加小组件时主动刷新(每天通常两次)。
+ * 由打卡 / 补记 / 开机 / 添加小组件 / 切换外观 / 时区变化时主动刷新,另加每天零点一次(半天补满、元旦换年)。
  */
 class TernDaysWidgetProvider : AppWidgetProvider() {
 
-    override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
+    /**
+     * 广播里的耗时活统一走这里:goAsync 保活 + 后台线程 + 吞掉一切异常。
+     * 裸线程里的异常会直接杀掉进程,小组件读库失败不该带崩应用(此前三处各写一遍,改尺寸那处漏了 catch)。
+     */
+    private fun runAsync(block: () -> Unit) {
         val pending = goAsync()
         Thread {
             try {
-                push(context, manager, ids)
-                scheduleMidnightRefresh(context)
+                block()
             } catch (_: Throwable) {
-                // 裸线程里的异常会直接杀掉进程:小组件读库失败不该带崩应用
             } finally {
                 pending.finish()
             }
         }.start()
     }
 
+    override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) = runAsync {
+        push(context, manager, ids)
+        scheduleMidnightRefresh(context)
+    }
+
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == ACTION_MIDNIGHT) {
             // 天数会在零点自己变化(昨天的半天补满 1 天、元旦换年),必须主动刷一次
-            val pending = goAsync()
-            Thread {
-                try {
-                    pushAllSync(context)
-                    scheduleMidnightRefresh(context)
-                } catch (_: Throwable) {
-                    // 同上:不能把进程带崩
-                } finally {
-                    pending.finish()
-                }
-            }.start()
+            runAsync {
+                pushAllSync(context)
+                scheduleMidnightRefresh(context)
+            }
             return
         }
         super.onReceive(context, intent)
@@ -68,18 +69,11 @@ class TernDaysWidgetProvider : AppWidgetProvider() {
         cancelMidnightRefresh(context)
     }
 
-    /** 用户拖拽改尺寸后按新高度决定脚注显示几行。 */
+    /** 用户拖拽改尺寸后按新高度决定显示几行。 */
     override fun onAppWidgetOptionsChanged(
         context: Context, manager: AppWidgetManager, appWidgetId: Int, newOptions: Bundle,
-    ) {
-        val pending = goAsync()
-        Thread {
-            try {
-                push(context, manager, intArrayOf(appWidgetId))
-            } finally {
-                pending.finish()
-            }
-        }.start()
+    ) = runAsync {
+        push(context, manager, intArrayOf(appWidgetId))
     }
 
     companion object {
@@ -89,10 +83,6 @@ class TernDaysWidgetProvider : AppWidgetProvider() {
 
         /** 第 2、3 行前面的弹性间距:行不显示时一并收掉,免得留一段空白 */
         private val CITY_GAP_IDS = intArrayOf(View.NO_ID, R.id.widget_gap_2, R.id.widget_gap_3)
-
-        /** 竖屏高度够放满 3 行 / 2 行所需的 dp（行 ≈ 27dp,含年份与 16dp 上下边距）。 */
-        private const val HEIGHT_THREE_ROWS_DP = 134
-        private const val HEIGHT_TWO_ROWS_DP = 106
 
         const val ACTION_MIDNIGHT = "app.terndays.action.WIDGET_MIDNIGHT"
         private const val MIDNIGHT_REQUEST_CODE = 2001
@@ -106,7 +96,8 @@ class TernDaysWidgetProvider : AppWidgetProvider() {
         /**
          * 排下一个零点的刷新。v0.9 起天数会随时间变化(进行中的今天先算 0.5,过了零点补满),
          * 而刷新一直是纯打卡驱动的——不排这一次,凌晨到次日首次打卡之间小组件会一直少半天,
-         * 元旦凌晨甚至还写着去年。用非精确闹钟即可(差几分钟无所谓,也不耗电)。
+         * 元旦凌晨甚至还写着去年。用 10 分钟的窗口闹钟:setAndAllowWhileIdle 在 Android 8–11
+         * 上可能被推迟好几个小时,窗口闹钟既准又不需要精确闹钟权限。
          */
         fun scheduleMidnightRefresh(context: Context) {
             val app = context.applicationContext
@@ -116,7 +107,7 @@ class TernDaysWidgetProvider : AppWidgetProvider() {
                 .toInstant().toEpochMilli() + 5_000
             runCatching {
                 app.getSystemService(AlarmManager::class.java)
-                    .setAndAllowWhileIdle(AlarmManager.RTC, at, midnightIntent(app))
+                    .setWindow(AlarmManager.RTC, at, 10 * 60_000L, midnightIntent(app))
             }
         }
 
@@ -181,13 +172,10 @@ class TernDaysWidgetProvider : AppWidgetProvider() {
             views.setTextViewText(R.id.widget_year, model.yearLabel)
 
             // 矮格子放不下三行就少显示一行,宁可少显示也不截断(0 = 启动器没给尺寸,按标准 2×2 处理)。
-            // 阈值随系统字体缩放放大:大字号下每行更高,否则第三行会被裁掉。
-            val scale = context.resources.configuration.fontScale.coerceIn(1f, 2f)
-            val maxRows = when {
-                heightDp == 0 || heightDp >= HEIGHT_THREE_ROWS_DP * scale -> 3
-                heightDp >= HEIGHT_TWO_ROWS_DP * scale -> 2
-                else -> 1
-            }
+            // 只有文字随字号缩放,边距不随;Android 14+ 是非线性缩放,按天数的 19sp 实测换算
+            val dm = context.resources.displayMetrics
+            val textScale = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 19f, dm) / (19f * dm.density)
+            val maxRows = WidgetSummary.maxRows(heightDp, textScale)
             for (i in CITY_ROW_IDS.indices) {
                 val line = model.topCities.getOrNull(i)?.takeIf { i < maxRows }
                 bindRow(views, CITY_ROW_IDS[i], CITY_NAME_IDS[i], CITY_DAYS_IDS[i], line)
@@ -199,12 +187,18 @@ class TernDaysWidgetProvider : AppWidgetProvider() {
                 R.id.widget_empty,
                 if (model.topCities.isEmpty()) View.VISIBLE else View.GONE,
             )
+            val emptyText = if (model.newYearEmpty) {
+                context.getString(R.string.widget_empty_new_year, LocalDate.now().year)
+            } else {
+                context.getString(R.string.widget_empty)
+            }
+            views.setTextViewText(R.id.widget_empty, emptyText)
 
             val unit = context.getString(R.string.widget_unit_day)
             views.setContentDescription(
                 R.id.widget_root,
                 if (model.topCities.isEmpty()) {
-                    "${model.yearLabel},${context.getString(R.string.widget_empty)}"
+                    "${model.yearLabel},$emptyText"
                 } else {
                     buildString {
                         append(model.yearLabel)

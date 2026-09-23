@@ -7,12 +7,14 @@
     <color name="widgetPrimary">#000000</color>
     <color name="widgetSecondary">#6E6E73</color>
     <color name="widgetAccent">#1F6289</color>
-    <!-- 系统材质(近似):90% 不透明的中性底 -->
+    <!-- 系统材质(近似):90% 不透明的中性底;底下透出任意壁纸,次级文字单独加深,保证 ≥4.5:1 -->
     <color name="widgetMaterialBase">#E6F5F7F9</color>
-    <!-- 品牌渐变:竖向两色标 + 白色文字三级 -->
-    <color name="widgetGradTop">#2E7FA8</color>
-    <color name="widgetGradBottom">#1B5578</color>
+    <color name="widgetMaterialSecondary">#5A5A5F</color>
+    <!-- 品牌渐变:竖向两色标 + 白色文字三级。顶部色标由 #2E7FA8 压深:白字此前只有约 4.45:1;
+         现在年份(90%)≥5.7:1、单位与空态(80%)≥4.9:1(两个色标上都成立) -->
+    <color name="widgetGradTop">#1F6289</color>
+    <color name="widgetGradBottom">#154766</color>
     <color name="widgetOnBrand">#FFFFFF</color>
-    <color name="widgetOnBrandYear">#D9FFFFFF</color>
-    <color name="widgetOnBrandFaint">#B8FFFFFF</color>
+    <color name="widgetOnBrandYear">#E6FFFFFF</color>
+    <color name="widgetOnBrandFaint">#CCFFFFFF</color>
 </resources>

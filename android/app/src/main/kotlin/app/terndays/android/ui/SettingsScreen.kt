@@ -29,6 +29,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -41,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -53,11 +59,11 @@ import app.terndays.android.Prefs
 import app.terndays.android.R
 import app.terndays.android.db.PunchDb
 import app.terndays.android.geo.Cities
-import app.terndays.android.migrate.MigrateClient
+import app.terndays.android.migrate.MigrateImportSession
 import app.terndays.android.util.Perms
 import app.terndays.android.util.VendorKeepAlive
 import app.terndays.core.DayOverride
-import app.terndays.core.MigrationLink
+import app.terndays.core.Fmt
 import app.terndays.core.OverrideScope
 import app.terndays.core.WidgetStyle
 import com.journeyapps.barcodescanner.ScanContract
@@ -65,9 +71,18 @@ import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.runtime.rememberCoroutineScope
+import app.terndays.core.Regions
+import kotlinx.coroutines.launch
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
+fun SettingsScreen(
+    initialYear: Int? = null,
+    openBackfill: Boolean = false,
+    onBack: () -> Unit,
+    onMigrate: () -> Unit,
+) {
     val context = LocalContext.current
     var tick by remember { mutableIntStateOf(0) }
     LifecycleResumeEffect(Unit) {
@@ -76,11 +91,10 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
     }
 
     // 年份可切换:此前写死当前年,往年的无记录日在应用里根本补不了
-    var year by remember { mutableIntStateOf(LocalDate.now().year) }
-    val dataVersion = DataBus.version.intValue
-    val data by produceState<YearData?>(initialValue = null, tick, dataVersion, year) {
-        value = loadYearData(context, year)
-    }
+    // 从首页「另有 N 天可补记」进来时带着首页正在看的年份;齿轮进来默认今年
+    var year by rememberSaveable { mutableIntStateOf(initialYear ?: LocalDate.now().year) }
+    val load = rememberYearData(year, tick)
+    val data = load.data
 
     val finePermLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -89,40 +103,32 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
         ActivityResultContracts.RequestPermission(),
     ) { tick++ }
 
-    var backfillOpen by remember { mutableStateOf(false) }
-    var importState by remember { mutableStateOf<ImportState?>(null) }
+    // 从首页「另有 N 天可补记」进来时直接打开补记(只在首次进入时,旋转后按保存的状态)
+    var backfillOpen by rememberSaveable { mutableStateOf(openBackfill) }
+    val scope = rememberCoroutineScope()
+    val importState = MigrateImportSession.state.value
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
         val text = result.contents ?: return@rememberLauncherForActivityResult
-        val link = MigrationLink.parse(text)
-        if (link == null) {
-            importState = ImportState.Failed("这不是 TernDays 的迁移二维码")
-        } else {
-            importState = ImportState.Working("正在连接旧手机…")
-            MigrateClient.run(
-                context, link,
-                onStatus = { msg -> importState = ImportState.Working(msg) },
-                onDone = { outcome ->
-                    importState = ImportState.Done(outcome)
-                    tick++
-                },
-                onError = { msg -> importState = ImportState.Failed(msg) },
-            )
-        }
+        MigrateImportSession.start(context, text)
+    }
+    // 导入完成要刷新本页数据(可补记天数等);导入期间保持亮屏,息屏会让传输中断
+    LaunchedEffect(importState is MigrateImportSession.State.Done) {
+        if (importState is MigrateImportSession.State.Done) tick++
+    }
+    val view = LocalView.current
+    DisposableEffect(importState is MigrateImportSession.State.Working) {
+        val working = importState is MigrateImportSession.State.Working
+        view.keepScreenOn = working
+        onDispose { if (working) view.keepScreenOn = false }
     }
 
     Column(Modifier.fillMaxSize().background(Td.Bg).statusBarsPadding().padding(horizontal = 20.dp)) {
         Spacer(Modifier.height(10.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconSquare(R.drawable.ic_chev_left, "返回") { onBack() }
-            Text(
-                "设置", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Td.Ink,
-                modifier = Modifier.weight(1f), textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.width(36.dp))
-        }
+        ScreenHeader("设置", onBack)
         Spacer(Modifier.height(12.dp))
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxSize()) {
+            if (load.failed) item { LoadErrorCard(load.retry) }
             item {
                 Text(
                     "打卡保障 · 每一项都会影响后台自动打卡的成功率",
@@ -204,46 +210,7 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
                     modifier = Modifier.padding(start = 2.dp, top = 4.dp),
                 )
             }
-            item {
-                var style by remember { mutableStateOf(Prefs.widgetStyle(context)) }
-                TdCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("外观", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.Ink)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf(
-                                WidgetStyle.PLAIN to "素面",
-                                WidgetStyle.MATERIAL to "系统材质",
-                                WidgetStyle.GRADIENT to "品牌渐变",
-                            ).forEach { (value, label) ->
-                                Text(
-                                    label,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (value == style) FontWeight.SemiBold else FontWeight.Normal,
-                                    color = if (value == style) Td.OnAccent else Td.Muted,
-                                    modifier = Modifier.clip(RoundedCornerShape(999.dp))
-                                        .background(if (value == style) Td.Accent else Td.Bg)
-                                        .clickable {
-                                            style = value
-                                            Prefs.setWidgetStyle(context, value)
-                                            app.terndays.android.widget.TernDaysWidgetProvider.updateAll(context)
-                                        }
-                                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                                )
-                            }
-                        }
-                        Text(
-                            when (style) {
-                                WidgetStyle.PLAIN -> "实心底面，和系统自带的小组件同质，放在任何壁纸上都稳。"
-                                WidgetStyle.MATERIAL ->
-                                    "让壁纸透一点出来。小组件是静态快照，安卓做不出实时模糊，这里是接近的近似；" +
-                                        "花壁纸上会显脏，那就换回素面。"
-                                WidgetStyle.GRADIENT -> "品牌色竖向渐变、文字全白，一眼认得出，也不挑壁纸。"
-                            },
-                            fontSize = 12.sp, color = Td.Muted, lineHeight = 18.sp,
-                        )
-                    }
-                }
-            }
+            item { WidgetStyleCard() }
 
             item {
                 Text(
@@ -259,9 +226,9 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text("补记无记录的日子", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.Ink)
+                                Text("补记", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.Ink)
                                 Text(
-                                    "$year 年还有 ${data?.stats?.unrecordedDates?.size ?: 0} 天没有任何记录",
+                                    "单日或一段日子；$year 年还有 ${data?.stats?.unrecordedDates?.size ?: 0} 天没有任何记录",
                                     fontSize = 12.sp, color = Td.Muted,
                                 )
                             }
@@ -270,22 +237,13 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
                         // 往年也能补记:切到那一年即可
                         val years = data?.years ?: listOf(year)
                         if (years.size > 1) {
+                            // 年份多了要能横向滚动,不然早期年份点不到
                             Row(
-                                Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 10.dp)
+                                    .selectableGroup(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                years.forEach { y ->
-                                    Text(
-                                        "$y 年",
-                                        fontSize = 12.sp,
-                                        fontWeight = if (y == year) FontWeight.SemiBold else FontWeight.Normal,
-                                        color = if (y == year) Td.OnAccent else Td.Muted,
-                                        modifier = Modifier.clip(RoundedCornerShape(999.dp))
-                                            .background(if (y == year) Td.Accent else Td.Bg)
-                                            .clickable { year = y }
-                                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                                    )
-                                }
+                                years.forEach { y -> ScopeChip("$y 年", y == year) { year = y } }
                             }
                         }
                         HorizontalDivider(color = Td.Divider, thickness = 1.dp)
@@ -315,21 +273,31 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
                                             "${o.localDate.monthValue}月${o.localDate.dayOfMonth}日 · $scopeLabel → ${o.cityName}",
                                             fontSize = 13.sp, color = Td.Ink, modifier = Modifier.weight(1f),
                                         )
-                                        Text(
-                                            "恢复自动", fontSize = 12.sp, color = Td.WarmDeep,
-                                            modifier = Modifier.clickable {
-                                                PunchDb.get(context).removeOverride(o.localDate, o.scope)
-                                                app.terndays.android.widget.TernDaysWidgetProvider.updateAll(context)
-                                                DataBus.bump()
-                                                tick++
-                                            }.padding(6.dp),
-                                        )
+                                        TdTextButton("恢复自动", color = Td.WarmDeep, fontSize = 12.sp) {
+                                            Corrections.scope.launch { Corrections.removeScope(context, o.localDate, o.scope) }
+                                        }
                                     }
                                 }
                         }
                     }
                 }
             }
+
+            item {
+                Text(
+                    "天数提醒", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Td.Muted,
+                    modifier = Modifier.padding(start = 2.dp, top = 4.dp),
+                )
+            }
+            item { ThresholdsCard(data?.stats?.cities?.map { Regions.codeOf(it.cityKey) }?.distinct() ?: emptyList()) }
+
+            item {
+                Text(
+                    "数据", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Td.Muted,
+                    modifier = Modifier.padding(start = 2.dp, top = 4.dp),
+                )
+            }
+            item { DataCard() }
 
             item {
                 Text(
@@ -402,7 +370,7 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
 
     when (val s = importState) {
         null -> Unit
-        is ImportState.Working -> Dialog(onDismissRequest = { }) {
+        is MigrateImportSession.State.Working -> Dialog(onDismissRequest = { }) {
             TdCard(Modifier.fillMaxWidth()) {
                 Column(
                     Modifier.padding(24.dp),
@@ -414,63 +382,46 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
                 }
             }
         }
-        is ImportState.Done -> Dialog(onDismissRequest = { importState = null }) {
+        is MigrateImportSession.State.Done -> Dialog(onDismissRequest = { MigrateImportSession.clear() }) {
             TdCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("导入完成 ✓", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Td.Ink)
                     val r = s.outcome.result
                     Text(
-                        buildString {
-                            append("新增 ${r.punchesAdded} 条打卡、${r.overridesAdded} 条手动记录")
-                            if (r.punchesSkipped + r.overridesSkipped > 0) {
-                                append(";本机已有的 ${r.punchesSkipped + r.overridesSkipped} 条保持不变")
-                            }
-                            if (s.outcome.remapped > 0) append("\n已按本机城市库修正 ${s.outcome.remapped} 条城市判定")
-                        },
+                        mergeSummary(r, s.outcome.remapped, "旧手机"),
                         fontSize = 13.sp, color = Td.Muted, lineHeight = 20.sp,
                     )
-                    Text(
-                        "好", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.AccentDeep,
-                        modifier = Modifier.align(Alignment.End)
-                            .clickable { importState = null }.padding(8.dp),
-                    )
+                    TdTextButton("好", modifier = Modifier.align(Alignment.End)) { MigrateImportSession.clear() }
                 }
             }
         }
-        is ImportState.Failed -> Dialog(onDismissRequest = { importState = null }) {
+        is MigrateImportSession.State.Failed -> Dialog(onDismissRequest = { MigrateImportSession.clear() }) {
             TdCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("导入没有成功", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Td.Ink)
                     Text(s.message, fontSize = 13.sp, color = Td.Muted, lineHeight = 20.sp)
-                    Text(
-                        "知道了", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.AccentDeep,
-                        modifier = Modifier.align(Alignment.End)
-                            .clickable { importState = null }.padding(8.dp),
-                    )
+                    TdTextButton("知道了", modifier = Modifier.align(Alignment.End)) { MigrateImportSession.clear() }
                 }
             }
         }
     }
 
-    if (backfillOpen) {
+    // 数据读到之后再打开:补记弹窗只在第一次组合时按「最近一个无记录日」定默认日期,
+    // 先用空列表打开会停在昨天(多半已有记录),一选城市就把昨天整天改掉了
+    if (backfillOpen && data != null) {
+        val days = data.stats.days
         BackfillDialog(
-            unrecorded = data?.stats?.unrecordedDates ?: emptyList(),
-            recentCities = data?.stats?.cities?.map { it.cityKey to it.cityName } ?: emptyList(),
-            onDismiss = { backfillOpen = false },
-            onConfirm = { date, key, name ->
-                PunchDb.get(context).setOverride(DayOverride(date, key, name))
-                app.terndays.android.widget.TernDaysWidgetProvider.updateAll(context)
-                backfillOpen = false
-                tick++
+            unrecorded = data.stats.unrecordedDates,
+            recentCities = data.stats.cities.map { it.cityKey to it.cityName },
+            trackingSince = data.stats.trackingSince,
+            neighbors = { d ->
+                listOf(d.minusDays(1), d.plusDays(1)).flatMap { n ->
+                    days[n]?.shares?.map { it.cityKey to it.cityName } ?: emptyList()
+                }
             },
+            onDismiss = { backfillOpen = false },
         )
     }
-}
-
-private sealed interface ImportState {
-    data class Working(val message: String) : ImportState
-    data class Done(val outcome: MigrateClient.Outcome) : ImportState
-    data class Failed(val message: String) : ImportState
 }
 
 @Composable
@@ -502,7 +453,7 @@ private fun PermRow(title: String, sub: String, ok: Boolean?, onClick: () -> Uni
         when (ok) {
             true -> Tag("已开启", Td.AccentSoft, Td.AccentDeep)
             false -> Tag("未开启", Td.WarmSoft, Td.WarmDeep)
-            null -> Tag("去检查", Color(0xFFEDF1F4), Td.Muted)
+            null -> Tag("去检查", Td.NeutralSoft, Td.Muted)
         }
     }
 }
@@ -524,102 +475,5 @@ private fun AboutLine(label: String, value: String, onClick: (() -> Unit)? = nul
             value, fontSize = 12.sp, lineHeight = 18.sp,
             color = if (onClick != null) Td.AccentDeep else Td.Muted,
         )
-    }
-}
-
-@Composable
-private fun BackfillDialog(
-    unrecorded: List<LocalDate>,
-    recentCities: List<Pair<String, String>>,
-    onDismiss: () -> Unit,
-    onConfirm: (LocalDate, String, String) -> Unit,
-) {
-    val context = LocalContext.current
-    var pickedDate by remember { mutableStateOf<LocalDate?>(null) }
-    var query by remember { mutableStateOf("") }
-    val results by produceState(initialValue = emptyList<app.terndays.core.CityMatcher.SearchHit>(), query) {
-        value = if (query.isBlank()) {
-            emptyList()
-        } else {
-            withContext(Dispatchers.IO) { Cities.get(context).search(query, 12) }
-        }
-    }
-
-    Dialog(onDismissRequest = onDismiss) {
-        TdCard(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                val date = pickedDate
-                if (date == null) {
-                    Text("选择要补记的日期", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Td.Ink)
-                    if (unrecorded.isEmpty()) {
-                        Text("今年没有缺记录的日子 🎉", fontSize = 13.sp, color = Td.Muted)
-                    }
-                    LazyColumn(Modifier.heightIn(max = 320.dp)) {
-                        items(unrecorded.sortedDescending()) { d ->
-                            Text(
-                                "${d.monthValue}月${d.dayOfMonth}日 · ${weekCn(d)}",
-                                fontSize = 14.sp, color = Td.Ink,
-                                modifier = Modifier.fillMaxWidth().clickable { pickedDate = d }
-                                    .padding(vertical = 10.dp),
-                            )
-                        }
-                    }
-                } else {
-                    Text(
-                        "补记 ${date.monthValue}月${date.dayOfMonth}日 在哪个城市？",
-                        fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Td.Ink,
-                    )
-                    OutlinedTextField(
-                        value = query, onValueChange = { query = it },
-                        placeholder = { Text("搜索城市名（支持拼音）", fontSize = 13.sp) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                    )
-                    if (query.isBlank() && recentCities.isNotEmpty()) {
-                        Text("常去城市", fontSize = 11.sp, color = Td.Faint)
-                    }
-                    LazyColumn(Modifier.heightIn(max = 260.dp)) {
-                        if (query.isBlank()) {
-                            items(recentCities) { (key, name) ->
-                                Text(
-                                    name, fontSize = 14.sp, color = Td.Ink,
-                                    modifier = Modifier.fillMaxWidth()
-                                        .clickable { onConfirm(date, key, name) }
-                                        .padding(vertical = 10.dp),
-                                )
-                            }
-                        } else {
-                            items(results) { hit ->
-                                Row(
-                                    Modifier.fillMaxWidth()
-                                        .clickable { onConfirm(date, hit.cityKey, hit.cityName) }
-                                        .padding(vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(hit.cityName, fontSize = 14.sp, color = Td.Ink)
-                                    if (hit.region.isNotEmpty()) {
-                                        Spacer(Modifier.width(8.dp))
-                                        Text(hit.region, fontSize = 12.sp, color = Td.Faint)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    if (pickedDate != null) {
-                        Text(
-                            "重选日期", fontSize = 13.sp, color = Td.Muted,
-                            modifier = Modifier.clickable { pickedDate = null }.padding(8.dp),
-                        )
-                        Spacer(Modifier.width(8.dp))
-                    }
-                    Text(
-                        "取消", fontSize = 13.sp, color = Td.Muted,
-                        modifier = Modifier.clickable(onClick = onDismiss).padding(8.dp),
-                    )
-                }
-            }
-        }
     }
 }

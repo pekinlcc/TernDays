@@ -38,21 +38,38 @@ data class DayOverride(
     val scope: OverrideScope = OverrideScope.FULL,
 )
 
-data class CityShare(val cityKey: String, val cityName: String, val weight: Double)
+/** @param manual 这份权重是否来自手动更正(整天更正,或构成它的某个半天样本是半天更正) */
+data class CityShare(
+    val cityKey: String,
+    val cityName: String,
+    val weight: Double,
+    val manual: Boolean = false,
+)
 
-/** 一天的计入结果；shares 为空表示无记录。 */
+/**
+ * 一天的计入结果；shares 为空表示无记录。
+ * @param manual 这一天用到了任何手动更正
+ * @param provisional 进行中的今天:缺的那半天还没到点,结果还会变
+ *   (单样本先计 0.5;或者还一条都没有、但仍有机会自动打上——这不是「无记录」)
+ */
 data class DayAttribution(
     val date: LocalDate,
     val shares: List<CityShare>,
     val manual: Boolean = false,
+    val provisional: Boolean = false,
 )
 
+/**
+ * @param halfDays 已定型的半天数(跨城日各 0.5),不含进行中的今天
+ * @param provisionalHalf 进行中的今天先计的那 0.5 天(0 或 1)。days = fullDays + 0.5 × (halfDays + provisionalHalf)
+ */
 data class CityStat(
     val cityKey: String,
     val cityName: String,
     val days: Double,
     val fullDays: Int,
     val halfDays: Int,
+    val provisionalHalf: Int = 0,
 )
 
 data class YearStats(
@@ -66,4 +83,6 @@ data class YearStats(
     val days: Map<LocalDate, DayAttribution>,
     /** 「开始使用」之日：早于它的日子既不算漏记，也不该出现在导出的每日明细里 */
     val trackingSince: LocalDate? = null,
+    /** 按自然年统计(computeYearStats)才为 true;自定义区间即使从 1 月 1 日开始也不是「整年」 */
+    val wholeYear: Boolean = false,
 )

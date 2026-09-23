@@ -5,8 +5,12 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import app.terndays.android.Prefs
 import app.terndays.core.PunchRules
 import app.terndays.core.Slot
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.ZoneId
 import java.time.ZonedDateTime
 
 /**
@@ -21,9 +25,13 @@ object PunchScheduler {
     const val EXTRA_RETRY = "retry"
     private const val REQUEST_CODE = 1001
     private const val REQUEST_CODE_RETRY = 1002
-    private const val RETRY_DELAY_MS = 10 * 60 * 1000L
 
     fun scheduleNext(context: Context) {
+        // 暂停自动打卡时不排闹钟,并撤掉已经排上的(开机 / 时区变化 / 回到应用都会走到这里)
+        if (Prefs.punchPaused(context)) {
+            cancelAll(context)
+            return
+        }
         val next = PunchRules.nextPunchTime(ZonedDateTime.now())
         val slot = if (next.hour < 12) Slot.MORNING else Slot.EVENING
 
@@ -46,37 +54,57 @@ object PunchScheduler {
     }
 
     /**
-     * 定位失败后在补捕窗口内自己再试一次(此前只能干等用户打开应用)。
-     * @return true = 已排上重试;false = 窗口内已经来不及,调用方去发失败提醒
+     * 定位失败后在补捕窗口内再试**一次**(判定见 :core PunchRules.retryAt:重试本身失败不再排,
+     * 窗口终点按决策日期算)。
+     * @return 排上的重试时刻(毫秒);null = 不该或来不及重试,调用方去发失败提醒
      */
-    fun scheduleRetryIfInWindow(context: Context, slot: Slot): Boolean {
-        val now = ZonedDateTime.now()
-        val windowEnd = when (slot) {
-            Slot.MORNING -> now.toLocalDate().atTime(PunchRules.MORNING_WINDOW_END).atZone(now.zone)
-            Slot.EVENING -> now.toLocalDate().plusDays(1).atStartOfDay(now.zone)
-            Slot.EXTRA -> return false // 首点不重试:用户打开应用就会再打
-        }
-        val at = now.plusNanos(RETRY_DELAY_MS * 1_000_000)
-        if (!at.isBefore(windowEnd)) return false
+    fun scheduleRetry(context: Context, decisionDate: LocalDate, slot: Slot, isRetry: Boolean): Long? {
+        val zone = ZoneId.systemDefault()
+        val at = PunchRules.retryAt(decisionDate, slot, LocalDateTime.now(zone), isRetry) ?: return null
+        val am = context.getSystemService(AlarmManager::class.java)
+        val ms = at.atZone(zone).toInstant().toEpochMilli()
+        return runCatching {
+            if (canExact(context)) {
+                am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, ms, retryIntent(context, slot))
+            } else {
+                am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, ms, retryIntent(context, slot))
+            }
+            ms
+        }.getOrNull()
+    }
 
+    /** 暂停自动打卡:撤掉定时打卡与重试两类闹钟。 */
+    fun cancelAll(context: Context) {
+        runCatching {
+            val am = context.getSystemService(AlarmManager::class.java)
+            val punch = Intent(context, PunchReceiver::class.java).setAction(ACTION_PUNCH)
+            am.cancel(
+                PendingIntent.getBroadcast(
+                    context, REQUEST_CODE, punch,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+        }
+        cancelRetry(context)
+    }
+
+    /** 该时段已经打上:撤掉还没触发的重试,免得到点又闪一次前台通知。 */
+    fun cancelRetry(context: Context) {
+        runCatching {
+            context.getSystemService(AlarmManager::class.java).cancel(retryIntent(context, Slot.MORNING))
+        }
+    }
+
+    private fun retryIntent(context: Context, slot: Slot): PendingIntent {
         val intent = Intent(context, PunchReceiver::class.java)
             .setAction(ACTION_RETRY)
             .putExtra(EXTRA_SLOT, slot.name)
             .putExtra(EXTRA_RETRY, true)
-        val pi = PendingIntent.getBroadcast(
+        // 同一个 requestCode + FLAG_UPDATE_CURRENT:任何时刻最多只有一个重试在排队
+        return PendingIntent.getBroadcast(
             context, REQUEST_CODE_RETRY, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val am = context.getSystemService(AlarmManager::class.java)
-        val ms = at.toInstant().toEpochMilli()
-        runCatching {
-            if (canExact(context)) {
-                am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, ms, pi)
-            } else {
-                am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, ms, pi)
-            }
-        }.onFailure { return false }
-        return true
     }
 
     fun canExact(context: Context): Boolean {

@@ -17,7 +17,7 @@ enum PunchRules {
         return s
     }
 
-    static func slotInWindow(hour: Int, minute: Int) -> Slot? {
+    static func slotInWindow(hour: Int) -> Slot? {
         if hour >= morningHour && hour < morningWindowEndHour { return .morning }
         if hour >= eveningHour { return .evening }
         return nil
@@ -26,8 +26,7 @@ enum PunchRules {
     static func slotInWindow(at date: Date = Date(), timeZone: TimeZone = .current) -> Slot? {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = timeZone
-        let c = cal.dateComponents([.hour, .minute], from: date)
-        return slotInWindow(hour: c.hour!, minute: c.minute!)
+        return slotInWindow(hour: cal.component(.hour, from: date))
     }
 
     /// 是否延迟:严格超过「目标时刻 + 容差」即算(含秒,与 Android LocalTime 比较一致)

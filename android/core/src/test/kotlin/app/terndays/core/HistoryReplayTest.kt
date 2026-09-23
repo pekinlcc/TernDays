@@ -85,4 +85,24 @@ class HistoryReplayTest {
         val stable = listOf(item(1, d, 7, 39.9075, 116.3972, 20.0, "CN:北京", "北京"))
         assertTrue(HistoryReplay.replay(matcher, stable).none { it.changed })
     }
+
+    @Test
+    fun `重放按坐标缓存最近邻且结果逐条不变`() {
+        // 3650 条集中在 3 个坐标(家 / 公司 / 出差地),GPS 抖动在 1e-5° 量级
+        val spots = listOf(22.5210 to 114.0310, 22.5400 to 114.0600, 39.9075 to 116.3972)
+        val items = (0 until 3650).map { i ->
+            val (lat, lng) = spots[i % 3]
+            val d = LocalDate.of(2021, 1, 1).plusDays(i / 2L)
+            item(i.toLong(), d, if (i % 2 == 0) 7 else 17, lat + (i % 7) * 1e-6, lng, 30.0, "CN:深圳", "深圳")
+        }
+        var calls = 0
+        val counting: (Double, Double) -> List<CityMatcher.Match> = { lat, lng ->
+            calls++
+            matcher.nearestByCity(lat, lng, 3)
+        }
+        val cached = HistoryReplay.replayWith(counting, items)
+        assertTrue(calls <= 10, "最近邻调用 $calls 次")
+        val plain = HistoryReplay.replayWith({ lat, lng -> matcher.nearestByCity(lat, lng, 3) }, items, cache = false)
+        assertEquals(plain, cached)
+    }
 }

@@ -3,6 +3,7 @@ package app.terndays.core
 import java.time.LocalDate
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class DayCountingTest {
@@ -70,7 +71,7 @@ class DayCountingTest {
             null,
             DayOverride(LocalDate.parse("2026-08-27"), "CN:杭州", "杭州"),
         )
-        assertEquals(listOf(CityShare("CN:杭州", "杭州", 1.0)), overridden.shares)
+        assertEquals(listOf(CityShare("CN:杭州", "杭州", 1.0, manual = true)), overridden.shares)
         assertTrue(overridden.manual)
     }
 
@@ -139,22 +140,78 @@ class DayCountingTest {
         // 晚点被误判成香港,只更正下半天 → 深圳全天 1 天
         val eo = DayOverride(d, "CN:深圳", "深圳", OverrideScope.EVENING)
         val a1 = DayCounting.attributeDay(d, m, e, null, listOf(eo))
-        assertEquals(listOf(CityShare("CN:深圳", "深圳", 1.0)), a1.shares)
+        assertEquals(listOf(CityShare("CN:深圳", "深圳", 1.0, manual = true)), a1.shares)
         assertTrue(a1.manual)
         // 只更正上半天为北京 → 北京 0.5 + 香港 0.5,保住拆分
         val mo = DayOverride(d, "CN:北京", "北京", OverrideScope.MORNING)
         val a2 = DayCounting.attributeDay(d, m, e, null, listOf(mo))
         assertEquals(
-            listOf(CityShare("CN:北京", "北京", 0.5), CityShare("CN:香港", "香港", 0.5)),
+            listOf(CityShare("CN:北京", "北京", 0.5, manual = true), CityShare("CN:香港", "香港", 0.5)),
             a2.shares,
         )
         // FULL 与半天并存时 FULL 优先(存储层本会互斥,算法兜底)
         val full = DayOverride(d, "CN:上海", "上海", OverrideScope.FULL)
         val a3 = DayCounting.attributeDay(d, m, e, null, listOf(full, mo))
-        assertEquals(listOf(CityShare("CN:上海", "上海", 1.0)), a3.shares)
+        assertEquals(listOf(CityShare("CN:上海", "上海", 1.0, manual = true)), a3.shares)
         // 无打卡的日子,单独一个半天更正 → 单样本整天
         val a4 = DayCounting.attributeDay(d, null, null, null, listOf(eo))
-        assertEquals(listOf(CityShare("CN:深圳", "深圳", 1.0)), a4.shares)
+        assertEquals(listOf(CityShare("CN:深圳", "深圳", 1.0, manual = true)), a4.shares)
+    }
+
+    @Test
+    fun `进行中的今天标 provisional`() {
+        val d = LocalDate.parse("2026-09-01")
+        val t = 1_756_684_800_000L // 2026-09-01 08:00 +08:00
+        // ① 凌晨装机:首点(06:00)顶早点在 A,晚点在 B → 各 0.5,两个样本齐了,不是「进行中」
+        val extra = punch("2026-09-01", Slot.EXTRA, "广州", t - 2 * 3_600_000)
+        val eve = punch("2026-09-01", Slot.EVENING, "深圳", t + 9 * 3_600_000)
+        val a1 = DayCounting.attributeDay(d, null, eve, extra, emptyList(), pending = emptySet())
+        assertEquals(listOf(0.5, 0.5), a1.shares.map { it.weight })
+        assertFalse(a1.provisional)
+        // ② 今天只有早点、晚点还没到 → 0.5,provisional
+        val mor = punch("2026-09-01", Slot.MORNING, "深圳", t)
+        val a2 = DayCounting.attributeDay(d, mor, null, null, emptyList(), pending = setOf(Slot.EVENING))
+        assertEquals(listOf(CityShare("CN:深圳", "深圳", 0.5)), a2.shares)
+        assertTrue(a2.provisional)
+        // ③ 上半天手动更正、下半天还没到 → 更正城市 0.5,手动 + 进行中
+        val mo = DayOverride(d, "CN:东莞", "东莞", OverrideScope.MORNING)
+        val a3 = DayCounting.attributeDay(d, mor, null, null, listOf(mo), pending = setOf(Slot.EVENING))
+        assertEquals(listOf(CityShare("CN:东莞", "东莞", 0.5, manual = true)), a3.shares)
+        assertTrue(a3.provisional && a3.manual)
+        // 一条都还没有、仍有时段没到点 → 进行中而不是无记录;窗口都关了才是无记录
+        assertTrue(DayCounting.attributeDay(d, null, null, null, emptyList(), setOf(Slot.EVENING)).provisional)
+        assertFalse(DayCounting.attributeDay(d, null, null, null, emptyList(), emptySet()).provisional)
+        // 整天更正永远是定型的
+        val full = DayOverride(d, "CN:东莞", "东莞")
+        assertFalse(DayCounting.attributeDay(d, mor, null, null, listOf(full), setOf(Slot.EVENING)).provisional)
+    }
+
+    @Test
+    fun `进行中的半天不计入半天数且显示名确定`() {
+        val today = LocalDate.parse("2026-01-03")
+        val punches = listOf(
+            punch("2026-01-01", Slot.MORNING, "深圳", 1), punch("2026-01-01", Slot.EVENING, "香港", 2),
+            punch("2026-01-03", Slot.MORNING, "深圳", 3),
+        ).map { if (it.localDate.dayOfMonth == 1 && it.cityName == "深圳") it.copy(cityName = "深圳市") else it }
+        val stats = DayCounting.computeYearStats(2026, today, punches, emptyList(), nowHour = 9)
+        val sz = stats.cities.first { it.cityKey == "CN:深圳" }
+        assertEquals(1.0, sz.days)
+        assertEquals(1, sz.halfDays) // 只数 1/1 那个跨城半天
+        assertEquals(1, sz.provisionalHalf) // 今天先计的半天单列
+        // 同一 cityKey 两天名字不同:取最近那天的名字,和遍历顺序无关
+        assertEquals("深圳", sz.cityName)
+        // 1/2 窗口都关了 → 无记录;今天没过完 → 不算
+        assertEquals(listOf(LocalDate.parse("2026-01-02")), stats.unrecordedDates)
+        // 同天数同名时按 cityKey 兜底,排序稳定
+        val tie = DayCounting.computeYearStats(
+            2026, LocalDate.parse("2026-01-01"),
+            listOf(
+                punch("2026-01-01", Slot.MORNING, "甲", 1).copy(cityKey = "B:x", cityName = "同名"),
+                punch("2026-01-01", Slot.EVENING, "乙", 2).copy(cityKey = "A:x", cityName = "同名"),
+            ),
+            emptyList(),
+        )
+        assertEquals(listOf("A:x", "B:x"), tie.cities.map { it.cityKey })
     }
 
     @Test

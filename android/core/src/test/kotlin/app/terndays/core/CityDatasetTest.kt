@@ -70,7 +70,7 @@ class CityDatasetTest {
 
     @Test
     fun `名称搜索可用`() {
-        val hits = matcher.searchByName("杭州")
+        val hits = matcher.search("杭州").map { it.cityKey to it.cityName }
         assertTrue(hits.any { it.second == "杭州" }, "搜索『杭州』无结果")
     }
 

@@ -16,4 +16,10 @@ enum MergeRules {
         if incoming == .full { return existing.isEmpty }        // 本机已有半天更正时整天不得覆盖
         return !existing.contains(incoming)                     // 另半天可以补进来
     }
+
+    /// 导入时键(日期+时段 / 日期+范围)相同、本机保留的那条是否与对方「不一致」:
+    /// 城市不同才算冲突(完全相同的只是重复)。结果页据此写「其中 K 条与旧手机不一致,已保留本机版本」。
+    static func isConflict(local: Punch, incoming: Punch) -> Bool { local.cityKey != incoming.cityKey }
+
+    static func isConflict(local: DayOverride, incoming: DayOverride) -> Bool { local.cityKey != incoming.cityKey }
 }

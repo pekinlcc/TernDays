@@ -9,9 +9,11 @@ Sources:
     tools/pca.json): 省→市→区县 Chinese name hierarchy, used to roll Chinese
     county-level entries up to their prefecture-level city (地级市).
 
-Output (TSV, UTF-8, no header): lat<TAB>lng<TAB>key<TAB>display
+Output (TSV, UTF-8, no header): lat<TAB>lng<TAB>key<TAB>display[<TAB>pinyin]
   - key uniquely identifies a "city" for day counting (CN:杭州 / US:NY:New York City)
   - display is what the UI shows (中文优先)
+  - pinyin (5th column, v0.6.1+) is only emitted for CN / HK / MO / SG rows, so the
+    in-app city search can match "shenzhen" / "sz"; requires `pip install pypinyin`
 
 The apps resolve a GPS fix by nearest neighbour over all rows and take that
 row's key/display. Rows are a dense point cloud: Chinese county/district points

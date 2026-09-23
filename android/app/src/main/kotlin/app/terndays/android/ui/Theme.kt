@@ -38,6 +38,15 @@ object Td {
 
     /** 装饰性箭头等次要图形 */
     val Chevron: Color get() = if (dark) Color(0xFF57667A) else Color(0xFFC3CCD4)
+
+    /** 中性浅底(未完成的状态标签、其他城市的日子);深色下仍与 Muted 字保持对比 */
+    val NeutralSoft: Color get() = if (dark) Color(0xFF2A3542) else Color(0xFFEDF1F4)
+
+    /** 早点的太阳图标 */
+    val Sunrise: Color get() = if (dark) Color(0xFFD8A85A) else Color(0xFFA9762F)
+
+    /** 达到阈值等需要注意的状态 */
+    val Danger: Color get() = if (dark) Color(0xFFF2B8B5) else Color(0xFFB3261E)
 }
 
 @Composable

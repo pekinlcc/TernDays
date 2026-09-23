@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 及以下(fullBackupContent 不区分云备份与换机):打卡库与偏好一律不备份。
+     换机请用应用内「迁移到新手机」。 -->
+<full-backup-content>
+    <exclude domain="database" path="." />
+    <exclude domain="sharedpref" path="." />
+</full-backup-content>

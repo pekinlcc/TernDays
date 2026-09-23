@@ -3,6 +3,76 @@
 版本号规则：起始 0.1；小功能改进 → 0.2、0.3…；bug 修复 → 0.1.1、0.1.2…；
 重大功能 / 架构或设计重构 → 1.0.0、2.0.0…。每个版本对应一个 `vX.Y[.Z]` tag 与 GitHub Release。
 
+## v0.12 · 2026-09-23
+
+补记与更正、状态可见、换机与数据、统计扩展(详见 docs/release-notes/v0.12.md):
+
+- 补记:任意过去日期、区间补记(首日下午 / 末日中午可半天)、写完不关;更正统一可撤销;月历每天可点
+- 状态:最近一次尝试 / 下一次;警示优先级 + 最近漏记诊断;失败通知「立即打卡」;iOS 提醒开关 / 静默 / 「就记在这里」
+- 换机与数据:完成页停用旧手机、冲突计数、二维码随网络刷新;暂停自动打卡;加密文件备份 / 恢复;清除数据;
+  「未来」记录不作锚点并可删除
+- 统计:按国家 / 地区、天数提醒(自然年 / 最近 180 天)、行程时间线;导出支持区间、行程段、时区列
+- 可访问性:48dp 触摸目标、标题居中、深色对比、状态保存;小组件外观迷你预览、城市名自动缩字
+- :core 新增 Backfill / Anchors / Stays / Regions / Thresholds / Backup / computeRangeStats / Fmt;
+  重放缓存;fixtures/core-cases.json 双端对齐(iOS 在 CI 上比对);测试 88 → 105
+- 发布前多路复查 + 逐条复核,修正约 22 处:撤销 / 区间补记被取消、立即打卡在窗口外无反应、
+  几年的区间补记在 Android 8–11 崩溃、iOS「已达上限」提醒被吞、元旦后「连续第 N 天」清零、
+  区间导出标题冒充整年、导出时刻随系统区域变成本地数字等
+
+## v0.11.4 · 2026-09-23
+
+第二次全面复查的最后一批(计天 / 导出口径 + 年份切换 + 小组件):
+
+- :core `DayAttribution.provisional`、`CityShare.manual`、`CityStat.provisionalHalf`;显示名取最近一天、排序 cityKey 兜底;
+  iOS 同步(按日期有序遍历)。首页 / 城市详情 / 导出统一读这些字段;「手动」改为次级角标
+- 城市库重放时刷新手动更正里的城市名(`CityMatcher.nameOf`,双端)
+- 导出汇总:城市表 + 「项目 | 数值」两列小表(统计区间、开始记录日、导出时间);since==null 明细只写一行;
+  今天未打写「今天进行中(待记录)」;Android 导出页随 DataBus 刷新、导出即预览数据、按钮置灰说明
+- 年份:首页 pinnedYear(元旦自动换年)、`settings?year=`、iOS `SettingsRoute`;年份芯片横滚;空态带年份
+- Android `rememberYearData` 三态 + `LoadErrorCard`(四个页面)
+- 小组件:`runAsync`、零点 `setWindow`、时区变化刷新、`WidgetSummary.maxRows`(只缩放文字)、
+  渐变 #1F6289 / 90% / 80%、材质次级色、元旦空态、API ≤30 previewImage;iOS 同步配色与空态
+- `hasBothHalves` 更名 `allowHalfScope`;文档与注释对齐(B7)
+- :core 测试 82 → 88
+
+## v0.11.3 · 2026-09-23
+
+第二次全面复查的第三批(隐私备份口径 + 迁移健壮性):
+
+- Android `dataExtractionRules` / `fullBackupContent`:云备份排除 database 与 sharedpref(本地换机保留);
+  iOS 数据目录 `isExcludedFromBackup`,引导完成标记随数据目录走,iCloud 恢复后缺数据则重新引导
+- 引导页与 Info.plist 删掉失实的「只保留城市级别」,如实说明坐标只存本机
+- `isLanAddress` 双端严格解析 IPv4/IPv6 数字字面量(拒绝 "fd:x.attacker.example")
+- iOS 本地网络授权(.waiting PolicyDenied)暂停计时并给出原因;NWListener stop 强持有 self;
+  发送端 hello 5 秒超时;扫码页 CameraState
+- Android `MigrateImportSession` 进程级导入状态 + 导入时亮屏;MigrateServer 每连接独立线程、
+  hello 5 秒超时、陌生连接静默丢弃
+- :core 测试 80 → 82
+
+## v0.11.2 · 2026-09-23
+
+第二次全面复查的第二批(iOS 打卡与数据安全):
+
+- 后台刷新等写盘完成才 setTaskCompleted;SLC/前台打卡整段包 beginBackgroundTask
+- 在途定位超过 120 秒且日期/时段已变就作废重判;搁置过久的在途请求重新发起;epochMs 取定位时刻
+- 数据封印(重启后未解锁)可在前台 / protectedDataDidBecomeAvailable 时解开,封印期间的新记录并回磁盘;
+  封印时不打首点、不重解析、不导出;小组件显示「解锁手机后显示」
+- mergeImported 写盘失败整体回滚并抛错,迁移不再误报成功
+- 定位权限按状态就地申请(跳过引导后也能弹授权框);前台也展示通知;「仅使用期间」时说明原因
+- 监听时区 / 重大时间变化,刷新界面与小组件
+
+## v0.11.1 · 2026-09-23
+
+第二次全面复查后的第一批(Android 打卡止血 + CI):
+
+- **重试只一次**(:core PunchRules.retryAt):v0.9.1 起重试失败会一路再排到窗口关闭;
+  窗口终点按决策日期算;定位总开关关着时不重试、不再每 10 分钟响铃
+- 提醒按「日期|时段|原因」去重且 setOnlyAlertOnce;打上后撤掉重试与旧提醒
+- 后台定位只是「仅使用期间」时直接说明原因;请求按待决列表管理,并发请求不再被吞;定位等待持唤醒锁
+- 首页警示卡按真实缺项说明并直达修复(Perms.missing);自启动引导去掉被包可见性过滤废掉的预检
+- CI:新增 macOS job 编译 iOS;版本/城市库/小组件布局一致性检查前置;布局由 tools/gen_widget_layouts.py 生成
+- :core 测试 79 → 80
+
 ## v0.11 · 2026-09-06
 
 小组件三种外观全部落地(此前只实现了「素面」):

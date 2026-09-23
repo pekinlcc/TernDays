@@ -1,14 +1,18 @@
 import Foundation
 import Network
-import WidgetKit
 
 /// 旧手机侧:一次性局域网服务。协议与 Android 逐字节一致:
 /// 客户端 → "TERNMIG1"(8B)+sha256(key)(32B);服务端 → 4B 大端长度 + AES-GCM 密文;
 /// 客户端 → "TERNDONE"(8B)+4B 大端导入条数。指纹不匹配直接断开;成功一次即停止。
 final class MigrateSendServer {
     private var listener: NWListener?
+    private var pathMonitor: NWPathMonitor?
     private var stopped = false
     private let queue = DispatchQueue(label: "app.terndays.migrate.server")
+    // 以下三项只在 queue 上读写:网络变化后用同一把密钥、同一端口、新地址重新出码
+    private var key = Data()
+    private var port: UInt16 = 0
+    private var addresses: [String] = []
 
     var onReady: ((String) -> Void)?
     var onStatus: ((String) -> Void)?
@@ -20,6 +24,11 @@ final class MigrateSendServer {
     }
 
     private func startLocked() {
+        // 数据还锁着(读不出来)时导出的是空库:新手机会以为「迁移成功,0 条」
+        guard DataStore.shared.reloadIfSealed() else {
+            emitError("数据暂时读不到:请先解锁手机、在旧手机上打开一次 TernDays,再重新开始迁移。")
+            return
+        }
         do {
             let json = try MigrationCodec.toJson(
                 datasetVersion: Cities.datasetVersion,
@@ -38,13 +47,17 @@ final class MigrateSendServer {
             }
             let listener = try NWListener(using: .tcp)
             self.listener = listener
-            listener.stateUpdateHandler = { [weak self] state in
-                guard let self else { return }
+            self.key = key
+            self.addresses = addresses
+            // 处理器里只弱引用 listener:否则 listener → handler → listener 成环,取消后也不释放
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
+                guard let self, let listener else { return }
                 switch state {
                 case .ready:
                     if let port = listener.port?.rawValue {
-                        let qr = MigrationLink.build(addresses: addresses, port: port, key: key)
-                        DispatchQueue.main.async { self.onReady?(qr) }
+                        self.port = port
+                        self.emitQR()
+                        self.watchNetwork()
                     }
                 case .failed(let e):
                     self.emitError("启动迁移服务失败:\(e.localizedDescription)")
@@ -52,7 +65,8 @@ final class MigrateSendServer {
                 }
             }
             listener.newConnectionHandler = { [weak self] conn in
-                self?.handle(conn, blob: blob, fingerprint: fingerprint)
+                guard let self else { conn.cancel(); return }
+                self.handle(conn, blob: blob, fingerprint: fingerprint)
             }
             listener.start(queue: queue)
         } catch {
@@ -63,7 +77,11 @@ final class MigrateSendServer {
     private func handle(_ conn: NWConnection, blob: Data, fingerprint: Data) {
         conn.start(queue: queue)
         let helloLen = MigrationLink.magicHello.count + fingerprint.count
+        // 连上却迟迟不发暗号的陌生连接 5 秒后丢掉(回调都在同一串行队列上,标记无需加锁)
+        var helloSeen = false
+        queue.asyncAfter(deadline: .now() + 5) { if !helloSeen { conn.cancel() } }
         conn.receive(minimumIncompleteLength: helloLen, maximumLength: helloLen) { [weak self] data, _, _, _ in
+            helloSeen = true
             guard let self, !self.stopped else { conn.cancel(); return }
             guard let data, data.count == helloLen,
                   data.prefix(MigrationLink.magicHello.count) == MigrationLink.magicHello,
@@ -98,16 +116,49 @@ final class MigrateSendServer {
         }
     }
 
+    /// 调用方随后就会丢掉唯一的强引用:这里必须强持有 self 直到监听真正取消,
+    /// 否则 [weak self] 取到 nil,端口会一直开着
     func stop() {
-        queue.async { [weak self] in
-            self?.stopped = true
-            self?.stopListening()
+        queue.async { [self] in
+            stopped = true
+            stopListening()
         }
     }
 
     private func stopListening() {
         listener?.cancel()
         listener = nil
+        pathMonitor?.cancel()
+        pathMonitor = nil
+    }
+
+    /// queue 上调用:按当前地址出码
+    private func emitQR() {
+        let qr = MigrationLink.build(addresses: addresses, port: port, key: key)
+        DispatchQueue.main.async { [weak self] in self?.onReady?(qr) }
+    }
+
+    /// 换了 Wi-Fi、开关热点后本机地址会变,旧二维码里的地址就连不上了。
+    /// 监听网络变化(回调在 queue 上),用同一把密钥、同一端口、新的地址重新出码;监听本身绑定所有接口,不用重启。
+    private func watchNetwork() {
+        guard pathMonitor == nil else { return }
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] _ in
+            guard let self, !self.stopped, self.listener != nil, self.port != 0 else { return }
+            let fresh = Self.siteLocalAddresses()
+            if fresh.isEmpty {
+                DispatchQueue.main.async {
+                    self.onStatus?("本机暂时没有局域网地址:连上 Wi-Fi(或打开热点)后二维码会自动更新")
+                }
+                return
+            }
+            guard fresh != self.addresses else { return }
+            self.addresses = fresh
+            self.emitQR()
+            DispatchQueue.main.async { self.onStatus?("网络变了,二维码已更新:请让新手机扫这个新码") }
+        }
+        pathMonitor = monitor
+        monitor.start(queue: queue)
     }
 
     private func emitError(_ msg: String) {
@@ -155,9 +206,9 @@ final class MigrateSendServer {
 
 /// 新手机侧:依次尝试各地址连接旧手机,拉取、解密、合并导入,并按本机城市库重解析。
 enum MigrateImportClient {
+    /// 导入条数先报给界面;按本机城市库的重放在后台接着跑(ImportFinisher),改了城市判定再用 toast 补一句
     struct Outcome {
         let result: DataStore.MergeResult
-        let remapped: Int
     }
 
     static func run(
@@ -178,7 +229,7 @@ enum MigrateImportClient {
     ) {
         guard index < link.addresses.count else {
             DispatchQueue.main.async {
-                onError("连不上旧手机。请确认:两台手机连着同一个 Wi-Fi(或本机连上旧手机的热点),旧手机的迁移页面还开着,然后重新扫码。")
+                onError("连不上旧手机。请确认:两台手机连着同一个 Wi-Fi(或本机连上旧手机的热点),旧手机的迁移页面还开着,并且已允许 TernDays 访问本地网络,然后重新扫码。")
             }
             return
         }
@@ -188,25 +239,48 @@ enum MigrateImportClient {
             port: NWEndpoint.Port(rawValue: link.port)!,
             using: .tcp
         )
+        // 以下状态只在 queue 上读写(计时器与 stateUpdateHandler 都跑在它上面)
         var settled = false
-        queue.asyncAfter(deadline: .now() + 6) {
-            if !settled {
+        var timerGeneration = 0
+        var askedLocalNetwork = false
+        let next = {
+            tryAddress(link: link, index: index + 1, onStatus: onStatus, onDone: onDone, onError: onError)
+        }
+        func arm(_ seconds: TimeInterval, onExpire: @escaping () -> Void) {
+            timerGeneration += 1
+            let generation = timerGeneration
+            queue.asyncAfter(deadline: .now() + seconds) {
+                guard !settled, generation == timerGeneration else { return }
                 settled = true
                 conn.cancel()
-                tryAddress(link: link, index: index + 1, onStatus: onStatus, onDone: onDone, onError: onError)
+                onExpire()
             }
         }
+        queue.async { arm(6, onExpire: next) }
         conn.stateUpdateHandler = { state in
             switch state {
             case .ready:
                 guard !settled else { return }
                 settled = true
                 transfer(conn: conn, link: link, queue: queue, onStatus: onStatus, onDone: onDone, onError: onError)
+            case .waiting(let err):
+                // 首次连接局域网时系统弹「本地网络」授权框,期间连接停在 PolicyDenied(-65570)。
+                // 这时不能按 6 秒超时换下一个地址(每个地址都会被同一个授权拦住):
+                // 暂停计时等用户点允许;一直没放行就明确说原因
+                if case .dns(let code) = err, code == -65570, !askedLocalNetwork, !settled {
+                    askedLocalNetwork = true
+                    DispatchQueue.main.async { onStatus("请在系统弹窗里允许 TernDays 访问本地网络…") }
+                    arm(45) {
+                        DispatchQueue.main.async {
+                            onError("TernDays 没有「本地网络」权限,连不上旧手机。请到 设置 → 隐私与安全性 → 本地网络 打开 TernDays,然后重新扫码。")
+                        }
+                    }
+                }
             case .failed, .cancelled:
                 if !settled {
                     settled = true
                     conn.cancel()
-                    tryAddress(link: link, index: index + 1, onStatus: onStatus, onDone: onDone, onError: onError)
+                    next()
                 }
             default: break
             }
@@ -247,12 +321,20 @@ enum MigrateImportClient {
                 guard len > 0, len <= MigrationLink.maxBlobBytes else { fail("收到的数据长度异常,已中止"); return }
                 receiveExactly(conn, total: len, buffer: Data()) { blob in
                     guard let blob else { fail("传输中断,请重新扫码再试。"); return }
+                    let payload: MigrationPayload
                     do {
-                        let payload = try MigrationCodec.parse(
+                        payload = try MigrationCodec.parse(
                             try MigrationCrypto.open(key: link.key, blob: blob)
                         )
-                        DispatchQueue.main.async { onStatus("正在合并导入…") }
-                        let result = DataStore.shared.mergeImported(
+                    } catch {
+                        fail(error.localizedDescription); return
+                    }
+                    // 从这里起占住结束权:超时不能在合并落盘之后再报「失败」
+                    guard finished.compareAndSet(expected: false, to: true) else { return }
+                    DispatchQueue.main.async { onStatus("正在合并导入…") }
+                    do {
+                        // 写盘失败会整体回滚并抛错:此时不发 TERNDONE,旧手机不会误以为已迁移完成
+                        let result = try DataStore.shared.mergeImported(
                             punches: payload.punches, overrides: payload.overrides
                         )
                         var done = MigrationLink.magicDone
@@ -260,22 +342,13 @@ enum MigrateImportClient {
                         done.append(Data(bytes: &countBE, count: 4))
                         conn.send(content: done, completion: .contentProcessed { _ in conn.cancel() })
 
-                        // 导入的记录可能来自不同版本的城市库:按时间重放交叉验证重解析(幂等)
-                        var remapped = 0
-                        if result.punchesAdded > 0 {
-                            remapped = HistoryReplay.replayAll(store: DataStore.shared, matcher: Cities.matcher)
-                        }
-                        // 只补进了手动更正的那次导入同样会改变天数:界面与小组件都要刷新
-                        if result.punchesAdded + result.overridesAdded > 0 {
-                            WidgetCenter.shared.reloadAllTimelines()
-                            DispatchQueue.main.async {
-                                NotificationCenter.default.post(name: .terndaysDataChanged, object: nil)
-                            }
-                        }
-                        guard finished.compareAndSet(expected: false, to: true) else { return }
-                        DispatchQueue.main.async { onDone(Outcome(result: result, remapped: remapped)) }
+                        // 先把导入结果交给界面;刷新界面 / 小组件与按本机城市库重放都在 ImportFinisher 里(重放在后台)
+                        DispatchQueue.main.async { onDone(Outcome(result: result)) }
+                        ImportFinisher.afterMerge(result)
                     } catch {
-                        fail(error.localizedDescription)
+                        conn.cancel()
+                        let msg = error.localizedDescription
+                        DispatchQueue.main.async { onError(msg) }
                     }
                 }
             }

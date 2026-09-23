@@ -26,7 +26,7 @@ object DayCounting {
         runCatching { java.time.ZoneId.of(id) }.getOrElse { java.time.ZoneId.systemDefault() }
 
     /** 半天样本:来自打卡、首点兜底,或半天手动更正。 */
-    private data class Sample(val cityKey: String, val cityName: String)
+    private data class Sample(val cityKey: String, val cityName: String, val manual: Boolean = false)
 
     private fun Punch.sample() = Sample(cityKey, cityName)
 
@@ -63,13 +63,13 @@ object DayCounting {
     ): DayAttribution {
         val full = overrides.firstOrNull { it.scope == OverrideScope.FULL }
         if (full != null) {
-            return DayAttribution(date, listOf(CityShare(full.cityKey, full.cityName, 1.0)), manual = true)
+            return DayAttribution(date, listOf(CityShare(full.cityKey, full.cityName, 1.0, manual = true)), manual = true)
         }
         val mo = overrides.firstOrNull { it.scope == OverrideScope.MORNING }
         val eo = overrides.firstOrNull { it.scope == OverrideScope.EVENING }
-        val m = mo?.let { Sample(it.cityKey, it.cityName) }
+        val m = mo?.let { Sample(it.cityKey, it.cityName, manual = true) }
             ?: (morning ?: extra?.takeIf { PunchRules.isMorningHalf(localTime(it)) })?.sample()
-        val e = eo?.let { Sample(it.cityKey, it.cityName) }
+        val e = eo?.let { Sample(it.cityKey, it.cityName, manual = true) }
             ?: (evening ?: extra?.takeIf { !PunchRules.isMorningHalf(localTime(it)) })?.sample()
         return attributeSamples(date, m, e, manual = mo != null || eo != null, pending = pending)
     }
@@ -84,29 +84,39 @@ object DayCounting {
         return when {
             morning != null && evening != null ->
                 if (morning.cityKey == evening.cityKey) {
-                    DayAttribution(date, listOf(CityShare(morning.cityKey, morning.cityName, 1.0)), manual)
+                    val share = CityShare(morning.cityKey, morning.cityName, 1.0, morning.manual || evening.manual)
+                    DayAttribution(date, listOf(share), manual)
                 } else {
                     DayAttribution(
                         date,
                         listOf(
-                            CityShare(morning.cityKey, morning.cityName, 0.5),
-                            CityShare(evening.cityKey, evening.cityName, 0.5),
+                            CityShare(morning.cityKey, morning.cityName, 0.5, morning.manual),
+                            CityShare(evening.cityKey, evening.cityName, 0.5, evening.manual),
                         ),
                         manual,
                     )
                 }
-            // 单样本:另一半天还没到点(进行中的今天)只算 0.5 天;窗口已关则按整天
-            morning != null -> DayAttribution(
-                date,
-                listOf(CityShare(morning.cityKey, morning.cityName, if (Slot.EVENING in pending) 0.5 else 1.0)),
-                manual,
-            )
-            evening != null -> DayAttribution(
-                date,
-                listOf(CityShare(evening.cityKey, evening.cityName, if (Slot.MORNING in pending) 0.5 else 1.0)),
-                manual,
-            )
-            else -> DayAttribution(date, emptyList())
+            // 单样本:另一半天还没到点(进行中的今天)只算 0.5 天,并标记 provisional;窗口已关则按整天
+            morning != null -> {
+                val open = Slot.EVENING in pending
+                DayAttribution(
+                    date,
+                    listOf(CityShare(morning.cityKey, morning.cityName, if (open) 0.5 else 1.0, morning.manual)),
+                    manual,
+                    provisional = open,
+                )
+            }
+            evening != null -> {
+                val open = Slot.MORNING in pending
+                DayAttribution(
+                    date,
+                    listOf(CityShare(evening.cityKey, evening.cityName, if (open) 0.5 else 1.0, evening.manual)),
+                    manual,
+                    provisional = open,
+                )
+            }
+            // 还一条都没有:仍有时段没到点就是「进行中」,不是「无记录」
+            else -> DayAttribution(date, emptyList(), provisional = pending.isNotEmpty())
         }
     }
 
@@ -132,19 +142,40 @@ object DayCounting {
         val yearEnd = LocalDate.of(year, 12, 31)
         val last = if (today.isBefore(yearEnd)) today else yearEnd
         if (last.isBefore(first)) {
-            return YearStats(year, first, first, 0.0, emptyList(), emptyList(), emptyMap())
+            return YearStats(year, first, first, 0.0, emptyList(), emptyList(), emptyMap(), wholeYear = true)
         }
+        return computeRangeStats(first, last, today, punches, overrides, nowHour, earliestRecordDate)
+            .copy(year = year, wholeYear = true)
+    }
+
+    /**
+     * 任意区间(含首尾)的统计,口径与 [computeYearStats] 完全相同:自定义区间、「最近 180 天」、
+     * 跨年区间都走这里。结果的 year 取区间末日所在年份(仅作标签)。
+     */
+    fun computeRangeStats(
+        from: LocalDate,
+        to: LocalDate,
+        today: LocalDate,
+        punches: List<Punch>,
+        overrides: List<DayOverride>,
+        nowHour: Int? = null,
+        earliestRecordDate: LocalDate? = null,
+    ): YearStats {
+        require(!to.isBefore(from)) { "区间结束不能早于开始" }
+        val first = from
+        val last = to
+        fun inRange(d: LocalDate) = !d.isBefore(first) && !d.isAfter(last)
 
         val bySlot = HashMap<Pair<LocalDate, Slot>, Punch>()
         for (p in punches) {
-            if (p.localDate.year != year) continue
+            if (!inRange(p.localDate)) continue
             val k = p.localDate to p.slot
             val cur = bySlot[k]
             if (cur == null || p.epochMs < cur.epochMs) bySlot[k] = p
         }
-        val overridesByDate = overrides.filter { it.localDate.year == year }.groupBy { it.localDate }
+        val overridesByDate = overrides.filter { inRange(it.localDate) }.groupBy { it.localDate }
 
-        // 「无记录」从当年首条记录之日起算:安装/开始使用之前的日子不是「漏记」,
+        // 「无记录」从全库最早一条记录之日起算(跨年份):安装/开始使用之前的日子不是「漏记」,
         // 不再让新装用户首页一上来就显示「另有 240+ 天无记录」
         val firstRecordDate = minOf(
             earliestRecordDate ?: LocalDate.MAX,
@@ -176,21 +207,28 @@ object DayCounting {
             d = d.plusDays(1)
         }
 
-        data class Acc(var days: Double, var full: Int, var half: Int, val name: String)
+        data class Acc(var days: Double, var full: Int, var half: Int, var provisional: Int, var name: String)
         val acc = LinkedHashMap<String, Acc>()
+        // days 按日期升序:同一 cityKey 在不同日子名字不一样(城市库改过名)时,取最近那天的名字——
+        // 两端都按日期顺序遍历,显示名是确定的
         for (attr in days.values) {
             for (s in attr.shares) {
-                val a = acc.getOrPut(s.cityKey) { Acc(0.0, 0, 0, s.cityName) }
+                val a = acc.getOrPut(s.cityKey) { Acc(0.0, 0, 0, 0, s.cityName) }
                 a.days += s.weight
-                if (s.weight >= 1.0) a.full++ else a.half++
+                a.name = s.cityName
+                when {
+                    s.weight >= 1.0 -> a.full++
+                    attr.provisional -> a.provisional++
+                    else -> a.half++
+                }
             }
         }
         val cities = acc.entries
-            .map { CityStat(it.key, it.value.name, it.value.days, it.value.full, it.value.half) }
-            .sortedWith(compareByDescending<CityStat> { it.days }.thenBy { it.cityName })
+            .map { CityStat(it.key, it.value.name, it.value.days, it.value.full, it.value.half, it.value.provisional) }
+            .sortedWith(compareByDescending<CityStat> { it.days }.thenBy { it.cityName }.thenBy { it.cityKey })
 
         return YearStats(
-            year, first, last, recorded, cities, unrecorded, days,
+            last.year, first, last, recorded, cities, unrecorded, days,
             trackingSince = firstRecordDate.takeIf { it != LocalDate.MAX },
         )
     }

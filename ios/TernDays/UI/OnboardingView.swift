@@ -9,7 +9,8 @@ struct OnboardingView: View {
     @ObservedObject private var punch = PunchManager.shared
     @State private var notifAsked = false
     // 「始终允许」的系统升级弹窗一辈子只出现一次:请求过之后按钮改跳系统设置,不做死按钮
-    @State private var alwaysAsked = false
+    // 与 PunchManager 共用同一个键:系统只弹一次「始终允许」,之后只能去设置里改
+    @AppStorage("askedAlwaysLocation") private var alwaysAsked = false
 
     private enum Step {
         case whenInUse, always, notify, done
@@ -42,7 +43,7 @@ struct OnboardingView: View {
                         .font(.system(size: 56)).foregroundColor(Td.accent)
                         .padding(.bottom, 40)
                     HStack(spacing: 10) {
-                        timeChip(icon: "sun.max", tint: Color(hex: 0xA9762F), text: "07:00")
+                        timeChip(icon: "sun.max", tint: Td.sunrise, text: "07:00")
                         timeChip(icon: "sunset", tint: Td.muted, text: "17:00")
                     }
                     .offset(y: 16)
@@ -54,7 +55,7 @@ struct OnboardingView: View {
                     .multilineTextAlignment(.center)
                     .padding(.top, 28)
 
-                Text("每天早上 7:00 和下午 5:00 前后，TernDays 记录一次 GPS 定位，只保留“城市”级别的结果，用来统计你一年里在每座城市待了多少天。")
+                Text("每天早上 7:00 和下午 5:00 前后，TernDays 记录一次 GPS 定位，统计你一年里在每座城市待了多少天。定位坐标只存在本机（城市库升级后用来重新判定），界面只显示城市。")
                     .font(.system(size: 14)).foregroundColor(Td.muted)
                     .multilineTextAlignment(.center)
                     .lineSpacing(6)
@@ -95,9 +96,16 @@ struct OnboardingView: View {
                         .padding(.top, 8)
                 }
 
-                Button("稍后再说") { onDone() }
-                    .font(.system(size: 14)).foregroundColor(Td.muted)
-                    .padding(.top, 12)
+                Button {
+                    onDone()
+                } label: {
+                    Text("稍后再说")
+                        .font(.system(size: 14)).foregroundColor(Td.muted)
+                        .padding(.horizontal, 16)
+                        .tapTarget()
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 12)
 
                 Text("iOS 不允许后台精确定时任务：实际通过位置变化唤醒、\n定时提醒和打开应用补打完成，时间会有浮动")
                     .font(.system(size: 11)).foregroundColor(Td.faint)
@@ -125,8 +133,7 @@ struct OnboardingView: View {
                     UIApplication.shared.open(url)
                 }
             } else {
-                alwaysAsked = true
-                punch.requestAlways()
+                punch.requestAlways() // 内部会记下「已请求过」
             }
         case .notify:
             UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in

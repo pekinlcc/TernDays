@@ -14,8 +14,8 @@ android {
         applicationId = "app.terndays"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "0.11"
+        versionCode = 20
+        versionName = "0.12"
     }
 
     signingConfigs {

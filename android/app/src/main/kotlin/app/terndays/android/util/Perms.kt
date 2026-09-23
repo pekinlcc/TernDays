@@ -67,8 +67,17 @@ object Perms {
         context.getSystemService(PowerManager::class.java)
             .isIgnoringBatteryOptimizations(context.packageName)
 
-    fun allCoreGranted(context: Context): Boolean =
-        anyLocation(context) && backgroundLocation(context) && locationServicesEnabled(context)
+    /** 自动打卡跑不起来的原因,按修复顺序排:先总开关,再定位权限,再「始终允许」。 */
+    enum class Missing { LOCATION_SERVICES, LOCATION, BACKGROUND }
+
+    fun missing(context: Context): Missing? = when {
+        !locationServicesEnabled(context) -> Missing.LOCATION_SERVICES
+        !anyLocation(context) -> Missing.LOCATION
+        !backgroundLocation(context) -> Missing.BACKGROUND
+        else -> null
+    }
+
+    fun allCoreGranted(context: Context): Boolean = missing(context) == null
 
     // ---- 跳转 ----
 

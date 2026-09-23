@@ -25,4 +25,12 @@ object MergeRules {
         // 同一半天本机已有则保留本机；另一半天可以补进来（跨城日的 0.5 + 0.5）
         else -> !existing.contains(incoming)
     }
+
+    /**
+     * 导入时键(日期+时段 / 日期+范围)相同、本机保留的那条是否与旧手机「不一致」:
+     * 城市不同才算冲突(完全相同的只是重复)。结果页据此写「其中 K 条与旧手机不一致,已保留本机版本」。
+     */
+    fun isConflict(local: Punch, incoming: Punch): Boolean = local.cityKey != incoming.cityKey
+
+    fun isConflict(local: DayOverride, incoming: DayOverride): Boolean = local.cityKey != incoming.cityKey
 }

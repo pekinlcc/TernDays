@@ -65,6 +65,38 @@ struct LocalDate: Hashable, Comparable, Codable, CustomStringConvertible {
 
     static func today() -> LocalDate { LocalDate(from: Date(), in: TimeZone.current) }
 
+    /// 1970-01-01 起的天数(与 java.time.LocalDate.toEpochDay 同义)。纯整数运算、与时区无关,
+    /// 区间补记 / 滚动 180 天 / 行程跨度都靠它加减天数,不经过 Calendar(夏令时零点空洞不影响)。
+    var epochDay: Int {
+        let y = month <= 2 ? year - 1 : year
+        let era = (y >= 0 ? y : y - 399) / 400
+        let yoe = y - era * 400
+        let mp = (month + 9) % 12 // 三月 = 0
+        let doy = (153 * mp + 2) / 5 + day - 1
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+        return era * 146_097 + doe - 719_468
+    }
+
+    init(epochDay: Int) {
+        let z = epochDay + 719_468
+        let era = (z >= 0 ? z : z - 146_096) / 146_097
+        let doe = z - era * 146_097
+        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365
+        let y = yoe + era * 400
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+        let mp = (5 * doy + 2) / 153
+        let d = doy - (153 * mp + 2) / 5 + 1
+        let m = mp < 10 ? mp + 3 : mp - 9
+        self.init(year: m <= 2 ? y + 1 : y, month: m, day: d)
+    }
+
+    func plusDays(_ n: Int) -> LocalDate { n == 0 ? self : LocalDate(epochDay: epochDay + n) }
+
+    func minusDays(_ n: Int) -> LocalDate { plusDays(-n) }
+
+    /// b - a 的天数(b 在 a 之后为正)
+    static func daysBetween(_ a: LocalDate, _ b: LocalDate) -> Int { b.epochDay - a.epochDay }
+
     func encode(to encoder: Encoder) throws {
         var c = encoder.singleValueContainer()
         try c.encode(description)
@@ -156,16 +188,21 @@ struct DayOverride: Codable {
     }
 }
 
+/// manual:这份权重是否来自手动更正(整天更正,或构成它的某个半天样本是半天更正)
 struct CityShare: Equatable {
     let cityKey: String
     let cityName: String
     let weight: Double
+    var manual: Bool = false
 }
 
+/// 与 Android :core DayAttribution 同义。
+/// provisional = 进行中的今天:缺的那半天还没到点,结果还会变(单样本先计 0.5,或还一条都没有)
 struct DayAttribution {
     let date: LocalDate
     let shares: [CityShare]
     var manual: Bool = false
+    var provisional: Bool = false
 }
 
 struct CityStat: Identifiable {
@@ -174,7 +211,10 @@ struct CityStat: Identifiable {
     let cityName: String
     let days: Double
     let fullDays: Int
+    /// 已定型的半天数(不含进行中的今天)
     let halfDays: Int
+    /// 进行中的今天先计的那 0.5 天(0 或 1)
+    var provisionalHalf: Int = 0
 }
 
 struct YearStats {
@@ -188,4 +228,6 @@ struct YearStats {
     let days: [LocalDate: DayAttribution]
     /// 「开始使用」之日：早于它的日子既不算漏记，也不出现在导出的每日明细里
     var trackingSince: LocalDate? = nil
+    /// 按自然年统计(computeYearStats)才为 true;自定义区间即使从 1 月 1 日开始也不是「整年」
+    var wholeYear: Bool = false
 }

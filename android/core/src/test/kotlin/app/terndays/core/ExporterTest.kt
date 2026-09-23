@@ -41,6 +41,52 @@ class ExporterTest {
     }
 
     @Test
+    fun `汇总小表数值在第二列且进行中单独说明`() {
+        // 1/3 是今天、只有早点 → 先计 0.5,不进「半天数」
+        val today = punch("2026-01-03", Slot.MORNING, "深圳", 7, 1)
+        val s2 = DayCounting.computeYearStats(
+            2026, LocalDate.parse("2026-01-03"), punches + today, emptyList(), nowHour = 9,
+        )
+        val csv = Exporter.exportCsv(
+            s2, punches + today, includeSummary = true, includeDaily = true,
+            exportedAt = java.time.LocalDateTime.of(2026, 1, 3, 9, 30),
+        )
+        assertTrue(csv.contains("城市,天数,全天数,半天数,备注"))
+        assertTrue(csv.contains("深圳,1,0,1,含今天进行中的半天"))
+        assertTrue(csv.contains("\r\n项目,数值\r\n"))
+        assertTrue(csv.contains("\r\n合计（天）,2.5\r\n"))
+        assertTrue(csv.contains("\r\n无记录天数,0\r\n"))
+        assertTrue(csv.contains("统计区间,2026-01-01 至 2026-01-03"))
+        assertTrue(csv.contains("开始记录日,2026-01-01"))
+        assertTrue(csv.contains("导出时间,2026-01-03 09:30"))
+        assertTrue(csv.contains("2026-01-03,周六,07:01,深圳,,,,深圳 +0.5,今天进行中，先计半天"))
+
+        // 今天还一条都没有:写「今天进行中（待记录）」,不写「无记录」
+        val s3 = DayCounting.computeYearStats(2026, LocalDate.parse("2026-01-03"), punches, emptyList(), nowHour = 9)
+        val csv3 = Exporter.exportCsv(s3, punches, includeSummary = false, includeDaily = true)
+        assertTrue(csv3.contains("2026-01-03,周六,,,,,,今天进行中（待记录）,"))
+    }
+
+    @Test
+    fun `还没有任何记录时明细只写一行`() {
+        val empty = DayCounting.computeYearStats(2026, LocalDate.parse("2026-03-01"), emptyList(), emptyList())
+        assertTrue(Exporter.dailyRows(empty, emptyList()).isEmpty())
+        val csv = Exporter.exportCsv(empty, emptyList(), includeSummary = true, includeDaily = true)
+        assertTrue(csv.contains("开始记录日,尚未开始记录"))
+        assertTrue(csv.endsWith("日期,星期,早打卡,早城市,晚打卡,晚城市,首点,计入,备注,时区\r\n尚未开始记录"))
+        assertTrue(!csv.contains("无记录,"))
+    }
+
+    @Test
+    fun `手动只标在更正的那一份上`() {
+        val d = LocalDate.parse("2026-01-02")
+        val eo = DayOverride(d, "CN:广州", "广州", OverrideScope.EVENING)
+        val s2 = DayCounting.computeYearStats(2026, LocalDate.parse("2026-01-02"), punches, listOf(eo))
+        val csv = Exporter.exportCsv(s2, punches, includeSummary = false, includeDaily = true)
+        assertTrue(csv.contains("上海 +0.5 / 广州 +0.5（手动）,手动更正/补记"))
+    }
+
+    @Test
     fun `xlsx 结构可解包`() {
         val bytes = Exporter.exportXlsx(stats, punches, includeSummary = true, includeDaily = true)
         val entries = HashMap<String, String>()

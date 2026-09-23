@@ -47,4 +47,17 @@ class WidgetSummaryTest {
         assertEquals(3, WidgetSummary.build(stats).topCities.size)
         assertEquals(5, WidgetSummary.build(stats, topN = 10).topCities.size)
     }
+
+    @Test
+    fun `小组件行数只放大随字号变的部分`() {
+        assertEquals(3, WidgetSummary.maxRows(134, 1.0f))
+        assertEquals(2, WidgetSummary.maxRows(106, 1.0f))
+        assertEquals(1, WidgetSummary.maxRows(80, 1.0f))
+        // 旧算法把整个阈值 ×1.3 → 174,160dp 只给 2 行;实际放得下 3 行
+        assertEquals(3, WidgetSummary.maxRows(160, 1.3f))
+        assertEquals(2, WidgetSummary.maxRows(170, 2.0f))
+        assertEquals(1, WidgetSummary.maxRows(120, 2.0f))
+        // 启动器没给尺寸:按标准 2×2
+        assertEquals(3, WidgetSummary.maxRows(0, 2.0f))
+    }
 }

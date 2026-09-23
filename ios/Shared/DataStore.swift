@@ -25,6 +25,8 @@ final class DataStore {
     var onWriteFailure: ((String) -> Void)?
 
     private let dir: URL
+    /// 应用沙盒里的旧数据目录(v0.1 / 未开 App Group 的自签构建写在这里);清除全部数据时一并删掉
+    private let legacyDir: URL
     private var punchesURL: URL { dir.appendingPathComponent("punches.json") }
     private var overridesURL: URL { dir.appendingPathComponent("overrides.json") }
 
@@ -32,6 +34,7 @@ final class DataStore {
         let fm = FileManager.default
         let legacy = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("TernDays", isDirectory: true)
+        legacyDir = legacy
         if let group = fm.containerURL(forSecurityApplicationGroupIdentifier: AppGroup.id) {
             dir = group.appendingPathComponent("TernDays", isDirectory: true)
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -41,12 +44,35 @@ final class DataStore {
             dir = legacy
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
+        // 「数据只存本机」:整个数据目录不进 iCloud / 电脑备份(换机用应用内扫码迁移)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var excluded = dir
+        try? excluded.setResourceValues(values)
         let p: LoadResult<Punch> = Self.loadList(punchesURL)
         let o: LoadResult<DayOverride> = Self.loadList(overridesURL)
         punches = p.list ?? []
         overrides = o.list ?? []
         punchesUnreadable = p.unreadable
         overridesUnreadable = o.unreadable
+    }
+
+    // MARK: 引导完成标记
+    // onboardingDone 存在 UserDefaults 里,会随 iCloud 备份恢复;数据目录却被排除在备份外。
+    // 在数据目录里再放一个标记,两者不一致时以标记为准,避免「跳过引导、库却是空的」。
+
+    private var onboardedMarkerURL: URL { dir.appendingPathComponent(".onboarded") }
+
+    var hasOnboardingMarker: Bool { FileManager.default.fileExists(atPath: onboardedMarkerURL.path) }
+
+    /// 本机有没有数据文件(只看文件在不在,锁屏读不出内容时也成立)
+    var hasStoredDataFiles: Bool {
+        let fm = FileManager.default
+        return fm.fileExists(atPath: punchesURL.path) || fm.fileExists(atPath: overridesURL.path)
+    }
+
+    func markOnboarded() {
+        FileManager.default.createFile(atPath: onboardedMarkerURL.path, contents: Data())
     }
 
     /// 读档结果:要区分「文件不存在」(全新安装,空数组是真相)与
@@ -74,34 +100,78 @@ final class DataStore {
         return LoadResult(list: [], unreadable: false)
     }
 
-    /// 小组件进程可能长期复用:每次生成时间线前重读磁盘,避免展示过期数据。
+    /// 文件在但读不出来(典型:重启后首次解锁前被后台拉起,文件还处于数据保护中)。
+    /// 封印期间内存里的空数组不是真相:不落盘、不打卡、不做重解析。
+    var isSealed: Bool {
+        queue.sync { punchesUnreadable || overridesUnreadable }
+    }
+
+    /// 仍处于封印时重读一次(回到前台、受保护数据可用时调用)。@return 调用后是否已解封
+    @discardableResult
+    func reloadIfSealed() -> Bool {
+        if isSealed { reloadFromDisk() }
+        return !isSealed
+    }
+
+    /// 重读磁盘。小组件进程可能长期复用,每次生成时间线前调用;主应用在解封时调用。
+    /// 从封印状态解封时,把封印期间内存里新增的记录按去重键并回磁盘数据再落盘,不丢。
     func reloadFromDisk() {
         queue.sync {
+            let wasSealed = punchesUnreadable || overridesUnreadable
             let p: LoadResult<Punch> = Self.loadList(punchesURL)
             let o: LoadResult<DayOverride> = Self.loadList(overridesURL)
-            if let list = p.list { punches = list }
-            if let list = o.list { overrides = list }
-            // 这次读成功就解除封印,后续写入恢复正常
+            var needsPersist = false
+            if let list = p.list {
+                if punchesUnreadable {
+                    let extra = punches.filter { m in !list.contains { $0.localDate == m.localDate && $0.slot == m.slot } }
+                    punches = list + extra
+                    needsPersist = needsPersist || !extra.isEmpty
+                } else {
+                    punches = list
+                }
+            }
+            if let list = o.list {
+                if overridesUnreadable {
+                    let extra = overrides.filter { m in !list.contains { $0.localDate == m.localDate && $0.scope == m.scope } }
+                    overrides = list + extra
+                    needsPersist = needsPersist || !extra.isEmpty
+                } else {
+                    overrides = list
+                }
+            }
             punchesUnreadable = p.unreadable
             overridesUnreadable = o.unreadable
+            if wasSealed && needsPersist && !punchesUnreadable && !overridesUnreadable {
+                persist()
+            }
         }
     }
 
-    /// 老版本（v0.1）数据写在应用沙盒；启用 App Group 后做一次性搬迁
+    /// 老版本（v0.1）数据写在应用沙盒；启用 App Group 后做一次性搬迁。
+    /// 搬完删掉沙盒里的源文件:否则「清除本机全部数据」(或损坏文件被改名)后 App Group 里没有文件,
+    /// 下次启动又会把这份冻结的旧记录搬回来。App Group 可用时沙盒这份从来不读,删掉不丢数据。
     private static func migrate(from old: URL, to new: URL) {
         let fm = FileManager.default
         for name in ["punches.json", "overrides.json"] {
             let src = old.appendingPathComponent(name)
             let dst = new.appendingPathComponent(name)
-            if fm.fileExists(atPath: src.path) && !fm.fileExists(atPath: dst.path) {
-                try? fm.copyItem(at: src, to: dst)
+            guard fm.fileExists(atPath: src.path) else { continue }
+            if !fm.fileExists(atPath: dst.path) {
+                do {
+                    try fm.copyItem(at: src, to: dst)
+                } catch {
+                    continue // 没搬成(如首次解锁前读不出源文件):源文件留着,下次启动再搬
+                }
             }
+            // 刚搬完,或早先版本已搬过却留着源文件:沙盒里只剩一份旧副本
+            try? fm.removeItem(at: src)
         }
     }
 
     /// 落盘。原子写;读不出来的那份一律不写(避免用内存里的空数组覆盖真实历史);
     /// 写失败不再静默——回调出去让界面提示,否则用户以为已保存。
-    private func persist() {
+    @discardableResult
+    private func persist() -> Bool {
         var failed: [String] = []
         if punchesUnreadable {
             failed.append("打卡记录")
@@ -121,6 +191,7 @@ final class DataStore {
             let what = failed.joined(separator: "、")
             DispatchQueue.main.async { cb("\(what)没能保存到本机,请重试(存储空间不足或设备被锁定时会出现)") }
         }
+        return failed.isEmpty
     }
 
     /// @return true = 新插入；false = 该 (日期, 时段) 已有记录
@@ -159,13 +230,11 @@ final class DataStore {
         queue.sync { !punches.isEmpty }
     }
 
-    /// 行程连续性锚点:最近一条**非改判**(viaContext != true)且解析成功的打卡。
-    /// 被连续性/误差圈粘住的点不作锚,36h 上限才能真正限制整条粘滞链。
-    func latestAnchorPunch() -> Punch? {
-        queue.sync {
-            punches.filter { $0.cityKey != "unknown" && $0.viaContext != true }
-                .max { $0.epochMs < $1.epochMs }
-        }
+    /// 行程连续性锚点:最近一条**非改判**(viaContext != true)、解析成功、且**不晚于现在**的打卡
+    /// (Anchors.pick,与 Android 同一口径)。被连续性/误差圈粘住的点不作锚,36h 上限才能真正限制整条粘滞链;
+    /// 系统时间曾被拨到未来留下的记录也不作锚,否则链龄为负、粘滞链永不过期。
+    func latestAnchorPunch(nowMs: Int64 = Anchors.nowMs()) -> Punch? {
+        queue.sync { Anchors.pick(punches, nowMs: nowMs) }
     }
 
     /// 该日的整天更正(锚点参照只认整天更正)。
@@ -194,6 +263,60 @@ final class DataStore {
         }
     }
 
+    /// 城市库升级后按 cityKey 刷新手动更正里的城市名。@return 改了几条
+    func refreshOverrideNames(_ lookup: (String) -> String?) -> Int {
+        queue.sync {
+            var changed = 0
+            for i in overrides.indices {
+                let o = overrides[i]
+                guard let name = lookup(o.cityKey), name != o.cityName else { continue }
+                overrides[i] = DayOverride(localDate: o.localDate, cityKey: o.cityKey, cityName: name, scope: o.scope)
+                changed += 1
+            }
+            if changed > 0 { persist() }
+            return changed
+        }
+    }
+
+    /// 区间(含首尾)内的打卡,按时间升序。跨年区间 / 最近 180 天 / 相邻日建议都走这里。
+    func punchesBetween(_ from: LocalDate, _ to: LocalDate) -> [Punch] {
+        queue.sync {
+            punches.filter { $0.localDate >= from && $0.localDate <= to }.sorted { $0.epochMs < $1.epochMs }
+        }
+    }
+
+    func overridesBetween(_ from: LocalDate, _ to: LocalDate) -> [DayOverride] {
+        queue.sync { overrides.filter { $0.localDate >= from && $0.localDate <= to } }
+    }
+
+    /// 打卡 + 手动记录总条数(「确定清除全部 N 条记录?」)
+    func recordCount() -> Int {
+        queue.sync { punches.count + overrides.count }
+    }
+
+    /// 最近去过的城市(按最近一次出现的日期倒序、去重),补记 / 更正时作候选。
+    func recentCities(limit: Int = 8) -> [(key: String, name: String)] {
+        queue.sync {
+            var items: [(date: LocalDate, ms: Int64, key: String, name: String)] = []
+            items.reserveCapacity(punches.count + overrides.count)
+            for p in punches where p.cityKey != "unknown" {
+                items.append((p.localDate, p.epochMs, p.cityKey, p.cityName))
+            }
+            for o in overrides {
+                items.append((o.localDate, Int64.max, o.cityKey, o.cityName))
+            }
+            items.sort { a, b in a.date != b.date ? a.date > b.date : a.ms > b.ms }
+            var seen = Set<String>()
+            var out: [(key: String, name: String)] = []
+            for it in items where !seen.contains(it.key) {
+                seen.insert(it.key)
+                out.append((key: it.key, name: it.name))
+                if out.count >= limit { break }
+            }
+            return out
+        }
+    }
+
     func punchesForYear(_ year: Int) -> [Punch] {
         queue.sync { punches.filter { $0.localDate.year == year }.sorted { $0.epochMs < $1.epochMs } }
     }
@@ -212,6 +335,92 @@ final class DataStore {
             }
             overrides.append(o)
             persist()
+        }
+    }
+
+    /// 批量写入(区间补记):与 setOverride 同一套互斥规则(Backfill.merge),只落盘一次。
+    func setOverrides(_ list: [DayOverride]) {
+        guard !list.isEmpty else { return }
+        queue.sync {
+            overrides = Backfill.merge(existing: overrides, planned: list)
+            persist()
+        }
+    }
+
+    /// 这些日子现有的手动更正(写入前的快照,撤销用)。
+    func overridesOn(_ dates: Set<LocalDate>) -> [DayOverride] {
+        queue.sync { overrides.filter { dates.contains($0.localDate) } }
+    }
+
+    /// 撤销:把这些日子的手动更正原样换回快照(快照为空 = 这些日子恢复为没有更正)。
+    func replaceOverrides(on dates: Set<LocalDate>, with snapshot: [DayOverride]) {
+        queue.sync {
+            overrides.removeAll { dates.contains($0.localDate) }
+            overrides.append(contentsOf: snapshot.filter { dates.contains($0.localDate) })
+            persist()
+        }
+    }
+
+    /// 删除指定的打卡(系统时间被拨到未来留下的记录)。按 (日期, 时段, 时刻) 精确定位。@return 删了几条
+    @discardableResult
+    func deletePunches(_ targets: [Punch]) -> Int {
+        queue.sync {
+            let keys = Set(targets.map { "\($0.localDate)|\($0.slot.rawValue)|\($0.epochMs)" })
+            let before = punches.count
+            punches.removeAll { keys.contains("\($0.localDate)|\($0.slot.rawValue)|\($0.epochMs)") }
+            let removed = before - punches.count
+            if removed > 0 { persist() }
+            return removed
+        }
+    }
+
+    /// 清除本机全部记录:删数据文件(含沙盒旧副本、损坏备份)、清内存。用户明确要求清除,封印中(读不出来)的文件也照删。
+    /// 引导标记保留(清空后仍按已完成引导使用,下一次打卡即新的「首点」)。
+    /// @return false = 有文件没删掉(被数据保护锁着),界面提示解锁后重试
+    @discardableResult
+    func clearAll() -> Bool {
+        queue.sync {
+            let fm = FileManager.default
+            var ok = true
+            if fm.fileExists(atPath: punchesURL.path) {
+                do {
+                    try fm.removeItem(at: punchesURL)
+                    punches = []
+                    punchesUnreadable = false
+                } catch {
+                    ok = false
+                }
+            } else {
+                punches = []
+                punchesUnreadable = false
+            }
+            if fm.fileExists(atPath: overridesURL.path) {
+                do {
+                    try fm.removeItem(at: overridesURL)
+                    overrides = []
+                    overridesUnreadable = false
+                } catch {
+                    ok = false
+                }
+            } else {
+                overrides = []
+                overridesUnreadable = false
+            }
+            // 「不可恢复」要名副其实:沙盒里的旧目录(否则下次启动被 migrate 搬回来)
+            // 和读档时改名保留的损坏文件(里面同样是完整的位置历史)也一并删掉
+            var leftovers: [URL] = []
+            if legacyDir.standardizedFileURL.path != dir.standardizedFileURL.path {
+                leftovers.append(legacyDir.appendingPathComponent("punches.json"))
+                leftovers.append(legacyDir.appendingPathComponent("overrides.json"))
+            }
+            let names = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
+            for name in names where name.hasPrefix("punches.corrupt-") || name.hasPrefix("overrides.corrupt-") {
+                leftovers.append(dir.appendingPathComponent(name))
+            }
+            for url in leftovers where fm.fileExists(atPath: url.path) {
+                do { try fm.removeItem(at: url) } catch { ok = false }
+            }
+            return ok
         }
     }
 
@@ -244,32 +453,71 @@ final class DataStore {
         let punchesSkipped: Int
         let overridesAdded: Int
         let overridesSkipped: Int
+        /// 跳过的记录里,键相同但城市不同的条数(完全相同的只是重复,不算):
+        /// 结果页写「其中 K 条与旧手机不一致,已保留本机版本」
+        var punchesConflicting: Int = 0
+        var overridesConflicting: Int = 0
+
+        var added: Int { punchesAdded + overridesAdded }
+        var skipped: Int { punchesSkipped + overridesSkipped }
+        var conflicting: Int { punchesConflicting + overridesConflicting }
     }
 
     /// 迁移导入合并:打卡按 (日期, 时段)、手动记录按 (日期, 范围) 去重,本机已有的一律保留;
     /// 手动记录的判定与 Android :core MergeRules 同口径,且不破坏整天/半天互斥。
-    func mergeImported(punches newPunches: [Punch], overrides newOverrides: [DayOverride]) -> MergeResult {
-        queue.sync {
-            var pAdded = 0, pSkipped = 0, oAdded = 0, oSkipped = 0
+    enum MergeError: LocalizedError {
+        case notSaved
+        var errorDescription: String? { "数据没能保存到本机。请清理存储空间、保持手机解锁后,在旧手机上重新打开迁移页再扫一次。" }
+    }
+
+    /// 落盘失败时整体回滚并抛错:不能一边告诉旧手机「导入完成」,一边重启后什么都没有。
+    func mergeImported(punches newPunches: [Punch], overrides newOverrides: [DayOverride]) throws -> MergeResult {
+        try queue.sync {
+            guard !(punchesUnreadable || overridesUnreadable) else { throw MergeError.notSaved }
+            let savedPunches = punches
+            let savedOverrides = overrides
+            var pAdded = 0, pSkipped = 0, oAdded = 0, oSkipped = 0, pConflict = 0, oConflict = 0
+            // (日期|时段) → 本机那条:几千条对几千条逐一 contains 是平方级,换成字典
+            var local: [String: Punch] = [:]
+            for p in punches {
+                let k = "\(p.localDate)|\(p.slot.rawValue)"
+                if local[k] == nil { local[k] = p }
+            }
             for p in newPunches {
-                if punches.contains(where: { $0.localDate == p.localDate && $0.slot == p.slot }) {
+                let k = "\(p.localDate)|\(p.slot.rawValue)"
+                if let mine = local[k] {
                     pSkipped += 1
+                    if MergeRules.isConflict(local: mine, incoming: p) { pConflict += 1 }
                 } else {
                     punches.append(p)
+                    local[k] = p
                     pAdded += 1
                 }
             }
             for o in newOverrides {
-                let existing = Set(overrides.filter { $0.localDate == o.localDate }.map(\.scope))
+                let sameDay = overrides.filter { $0.localDate == o.localDate }
+                let existing = Set(sameDay.map(\.scope))
                 if MergeRules.shouldImportOverride(existing: existing, incoming: o.scope) {
                     overrides.append(o)
                     oAdded += 1
                 } else {
                     oSkipped += 1
+                    // 键(日期+范围)相同且城市不同才算不一致;整天 vs 半天这类互斥跳过不算
+                    if let mine = sameDay.first(where: { $0.scope == o.scope }),
+                       MergeRules.isConflict(local: mine, incoming: o) {
+                        oConflict += 1
+                    }
                 }
             }
-            if pAdded + oAdded > 0 { persist() }
-            return MergeResult(punchesAdded: pAdded, punchesSkipped: pSkipped, overridesAdded: oAdded, overridesSkipped: oSkipped)
+            if pAdded + oAdded > 0 && !persist() {
+                punches = savedPunches
+                overrides = savedOverrides
+                throw MergeError.notSaved
+            }
+            return MergeResult(
+                punchesAdded: pAdded, punchesSkipped: pSkipped, overridesAdded: oAdded, overridesSkipped: oSkipped,
+                punchesConflicting: pConflict, overridesConflicting: oConflict
+            )
         }
     }
 

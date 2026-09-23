@@ -10,6 +10,7 @@ enum DayCounting {
     private struct Sample {
         let cityKey: String
         let cityName: String
+        var manual: Bool = false
     }
 
     /// 这一天上/下半天各自有没有样本（含首点兜底）。界面据此决定能否做半天更正。
@@ -42,7 +43,7 @@ enum DayCounting {
         if let full = overrides.first(where: { $0.scope == .full }) {
             return DayAttribution(
                 date: date,
-                shares: [CityShare(cityKey: full.cityKey, cityName: full.cityName, weight: 1.0)],
+                shares: [CityShare(cityKey: full.cityKey, cityName: full.cityName, weight: 1.0, manual: true)],
                 manual: true
             )
         }
@@ -50,9 +51,9 @@ enum DayCounting {
         let eo = overrides.first { $0.scope == .evening }
         let mPunch = morning ?? extra.flatMap { $0.localHour < 12 ? $0 : nil }
         let ePunch = evening ?? extra.flatMap { $0.localHour >= 12 ? $0 : nil }
-        let m = mo.map { Sample(cityKey: $0.cityKey, cityName: $0.cityName) }
+        let m = mo.map { Sample(cityKey: $0.cityKey, cityName: $0.cityName, manual: true) }
             ?? mPunch.map { Sample(cityKey: $0.cityKey, cityName: $0.cityName) }
-        let e = eo.map { Sample(cityKey: $0.cityKey, cityName: $0.cityName) }
+        let e = eo.map { Sample(cityKey: $0.cityKey, cityName: $0.cityName, manual: true) }
             ?? ePunch.map { Sample(cityKey: $0.cityKey, cityName: $0.cityName) }
         return attributeSamples(date: date, morning: m, evening: e, manual: mo != nil || eo != nil, pending: pending)
     }
@@ -62,24 +63,41 @@ enum DayCounting {
         switch (morning, evening) {
         case let (m?, e?):
             if m.cityKey == e.cityKey {
-                return DayAttribution(date: date, shares: [CityShare(cityKey: m.cityKey, cityName: m.cityName, weight: 1.0)], manual: manual)
+                let share = CityShare(cityKey: m.cityKey, cityName: m.cityName, weight: 1.0, manual: m.manual || e.manual)
+                return DayAttribution(date: date, shares: [share], manual: manual)
             }
             return DayAttribution(date: date, shares: [
-                CityShare(cityKey: m.cityKey, cityName: m.cityName, weight: 0.5),
-                CityShare(cityKey: e.cityKey, cityName: e.cityName, weight: 0.5),
+                CityShare(cityKey: m.cityKey, cityName: m.cityName, weight: 0.5, manual: m.manual),
+                CityShare(cityKey: e.cityKey, cityName: e.cityName, weight: 0.5, manual: e.manual),
             ], manual: manual)
-        // 单样本:另一半天还没到点(进行中的今天)只算 0.5 天;窗口已关则按整天
+        // 单样本:另一半天还没到点(进行中的今天)只算 0.5 天并标 provisional;窗口已关则按整天
         case let (m?, nil):
-            let w = pending.contains(.evening) ? 0.5 : 1.0
-            return DayAttribution(date: date, shares: [CityShare(cityKey: m.cityKey, cityName: m.cityName, weight: w)], manual: manual)
+            let open = pending.contains(.evening)
+            return DayAttribution(
+                date: date,
+                shares: [CityShare(cityKey: m.cityKey, cityName: m.cityName, weight: open ? 0.5 : 1.0, manual: m.manual)],
+                manual: manual, provisional: open
+            )
         case let (nil, e?):
-            let w = pending.contains(.morning) ? 0.5 : 1.0
-            return DayAttribution(date: date, shares: [CityShare(cityKey: e.cityKey, cityName: e.cityName, weight: w)], manual: manual)
+            let open = pending.contains(.morning)
+            return DayAttribution(
+                date: date,
+                shares: [CityShare(cityKey: e.cityKey, cityName: e.cityName, weight: open ? 0.5 : 1.0, manual: e.manual)],
+                manual: manual, provisional: open
+            )
         default:
-            return DayAttribution(date: date, shares: [])
+            // 还一条都没有:仍有时段没到点就是「进行中」,不是「无记录」
+            return DayAttribution(date: date, shares: [], provisional: !pending.isEmpty)
         }
     }
 
+    /// 时区 id 来自落库时的系统值,也可能来自另一台手机导入的数据;
+    /// 解析不了(系统升级后个别 id 失效)就退回当前时区,不让首页 / 导出整个出错(与 Android zoneOf 同义)。
+    static func zoneOf(_ id: String) -> TimeZone {
+        TimeZone(identifier: id) ?? TimeZone.current
+    }
+
+    /// 统计某个自然年(1.1 至 今天/12.31 中较早者),是 computeRangeStats 的特例(与 Android 同一口径)。
     /// - Parameter nowHour: 当前本地小时（0–23）。给了就把 today 当作「进行中」：
     ///   还没打的那半天不算漏记，单样本先按 0.5 天计。传 nil 表示按已结束的日子统计。
     /// - Parameter earliestRecordDate: 全库最早一条记录的日期（跨年份）。跨年后 1 月初的漏记
@@ -97,19 +115,47 @@ enum DayCounting {
         let last = min(today, yearEnd)
         if last < first {
             return YearStats(year: year, firstDate: first, lastDate: first, recordedDays: 0,
+                             cities: [], unrecordedDates: [], days: [:], wholeYear: true)
+        }
+        let r = computeRangeStats(from: first, to: last, today: today, punches: punches, overrides: overrides,
+                                  nowHour: nowHour, earliestRecordDate: earliestRecordDate)
+        // 区间统计的 year 取末日所在年份;年度统计明确写成这一年,并标成「整年」(导出标题用)
+        return YearStats(year: year, firstDate: r.firstDate, lastDate: r.lastDate, recordedDays: r.recordedDays,
+                         cities: r.cities, unrecordedDates: r.unrecordedDates, days: r.days,
+                         trackingSince: r.trackingSince, wholeYear: true)
+    }
+
+    /// 任意区间(含首尾)的统计,口径与 computeYearStats 完全相同:自定义区间、「最近 180 天」、
+    /// 跨年区间都走这里。结果的 year 取区间末日所在年份(仅作标签)。
+    /// 同一 (日期, 时段) 出现多条记录时（如向西跨时区飞行），只取最早一条。
+    /// 调用方保证 from ≤ to(Android 端倒置直接抛异常);这里倒置时按空区间返回,不让界面崩掉。
+    static func computeRangeStats(
+        from: LocalDate,
+        to: LocalDate,
+        today: LocalDate,
+        punches: [Punch],
+        overrides: [DayOverride],
+        nowHour: Int? = nil,
+        earliestRecordDate: LocalDate? = nil
+    ) -> YearStats {
+        let first = from
+        let last = to
+        if last < first {
+            return YearStats(year: last.year, firstDate: first, lastDate: first, recordedDays: 0,
                              cities: [], unrecordedDates: [], days: [:])
         }
+        func inRange(_ d: LocalDate) -> Bool { d >= first && d <= last }
 
         // 同一 (日期, 时段) 多条记录（向西跨时区）只取最早
         var bySlot: [String: Punch] = [:]
-        for p in punches where p.localDate.year == year {
+        for p in punches where inRange(p.localDate) {
             let k = "\(p.localDate)|\(p.slot.rawValue)"
             if let cur = bySlot[k], cur.epochMs <= p.epochMs { continue }
             bySlot[k] = p
         }
-        let overridesByDate = Dictionary(grouping: overrides.filter { $0.localDate.year == year }) { $0.localDate }
+        let overridesByDate = Dictionary(grouping: overrides.filter { inRange($0.localDate) }) { $0.localDate }
 
-        // 「无记录」从当年首条记录之日起算:开始使用之前的日子不是漏记
+        // 「无记录」从全库最早一条记录之日起算(跨年份):开始使用之前的日子不是漏记
         let sentinel = LocalDate(year: 9999, month: 12, day: 31)
         let firstRecordDate = min(
             earliestRecordDate ?? sentinel,
@@ -135,27 +181,31 @@ enum DayCounting {
                 // 今天还没过完就不算「漏记」——还有机会自动打上
                 if d >= firstRecordDate && pending.isEmpty { unrecorded.append(d) }
             } else {
-                recorded += attr.shares.reduce(0) { $0 + $1.weight }
+                recorded += attr.shares.reduce(0.0) { $0 + $1.weight }
             }
             if d == last { break }
             d = d.next()
         }
 
-        var acc: [String: (name: String, days: Double, full: Int, half: Int)] = [:]
-        for attr in days.values {
+        // 按日期升序遍历(Dictionary 顺序每个进程都不同):同一 cityKey 在不同日子名字不一样时
+        // 取最近那天的名字,与 Android 一致,显示名是确定的
+        var acc: [String: (name: String, days: Double, full: Int, half: Int, provisional: Int)] = [:]
+        for date in days.keys.sorted() {
+            let attr = days[date]!
             for s in attr.shares {
-                var a = acc[s.cityKey] ?? (s.cityName, 0, 0, 0)
+                var a = acc[s.cityKey] ?? (s.cityName, 0, 0, 0, 0)
                 a.days += s.weight
-                if s.weight >= 1.0 { a.full += 1 } else { a.half += 1 }
+                a.name = s.cityName
+                if s.weight >= 1.0 { a.full += 1 } else if attr.provisional { a.provisional += 1 } else { a.half += 1 }
                 acc[s.cityKey] = a
             }
         }
         let cities = acc
             .map { CityStat(cityKey: $0.key, cityName: $0.value.name, days: $0.value.days,
-                            fullDays: $0.value.full, halfDays: $0.value.half) }
-            .sorted { ($0.days, $1.cityName) > ($1.days, $0.cityName) }
+                            fullDays: $0.value.full, halfDays: $0.value.half, provisionalHalf: $0.value.provisional) }
+            .sorted { ($0.days, $1.cityName, $1.cityKey) > ($1.days, $0.cityName, $0.cityKey) }
 
-        return YearStats(year: year, firstDate: first, lastDate: last, recordedDays: recorded,
+        return YearStats(year: last.year, firstDate: first, lastDate: last, recordedDays: recorded,
                          cities: cities, unrecordedDates: unrecorded.sorted(), days: days,
                          trackingSince: firstRecordDate == sentinel ? nil : firstRecordDate)
     }

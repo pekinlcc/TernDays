@@ -5,6 +5,7 @@ import UIKit
 /// 旧手机:「迁移到新手机」页——展示二维码,等新手机扫码连入并取走数据。
 struct MigrateSendView: View {
     @StateObject private var model = MigrateSendModel()
+    @ObservedObject private var punch = PunchManager.shared
 
     var body: some View {
         ScrollView {
@@ -34,19 +35,24 @@ struct MigrateSendView: View {
                         .multilineTextAlignment(.center)
                         .lineSpacing(4)
                 case .done(let count):
-                    VStack(spacing: 10) {
-                        Text("✓").font(.system(size: 44)).foregroundColor(Td.accent)
-                        Text("迁移完成").font(.system(size: 17, weight: .bold)).foregroundColor(Td.ink)
-                        Text("新手机已导入 \(count) 条记录。本机数据保持不变。")
-                            .font(.system(size: 13)).foregroundColor(Td.muted)
+                    doneView(count)
+                case .failed(let message):
+                    VStack(spacing: 16) {
+                        Text(message)
+                            .font(.system(size: 13)).foregroundColor(Td.warmDeep)
                             .multilineTextAlignment(.center)
+                        Button {
+                            model.retry()
+                        } label: {
+                            Text("重试")
+                                .font(.system(size: 15, weight: .semibold)).foregroundColor(Td.onAccent)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 48)
+                                .background(RoundedRectangle(cornerRadius: 14).fill(Td.accent))
+                        }
+                        .buttonStyle(.plain)
                     }
                     .padding(.top, 60)
-                case .failed(let message):
-                    Text(message)
-                        .font(.system(size: 13)).foregroundColor(Td.warmDeep)
-                        .multilineTextAlignment(.center)
-                        .padding(.top, 60)
                 }
             }
             .padding(.horizontal, 20)
@@ -64,6 +70,41 @@ struct MigrateSendView: View {
             UIApplication.shared.isIdleTimerDisabled = false
             model.stop()
         }
+    }
+}
+
+extension MigrateSendView {
+    /// 完成页:说清新手机收到了多少、旧手机之后会怎样,并给出「停止本机自动打卡」
+    fileprivate func doneView(_ count: Int) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "checkmark.circle.fill").font(.system(size: 44)).foregroundColor(Td.accent)
+            Text("迁移完成 ✓").font(.system(size: 17, weight: .bold)).foregroundColor(Td.ink)
+            Text(count > 0 ? "新手机导入了 \(count) 条" : "新手机已有全部记录,无需导入")
+                .font(.system(size: 14)).foregroundColor(Td.ink)
+                .multilineTextAlignment(.center)
+            Text("旧手机仍会继续自动打卡,之后的记录不会同步到新手机")
+                .font(.system(size: 12)).foregroundColor(Td.muted)
+                .multilineTextAlignment(.center)
+            if punch.paused {
+                Text("本机已停止自动打卡,可在 设置 → 数据 里恢复")
+                    .font(.system(size: 12)).foregroundColor(Td.accentDeep)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 8)
+            } else {
+                Button {
+                    punch.setPaused(true)
+                } label: {
+                    Text("停止本机自动打卡")
+                        .font(.system(size: 15, weight: .semibold)).foregroundColor(Td.onAccent)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .background(RoundedRectangle(cornerRadius: 14).fill(Td.accent))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 8)
+            }
+        }
+        .padding(.top, 60)
     }
 }
 
@@ -100,6 +141,13 @@ final class MigrateSendModel: ObservableObject {
     func stop() {
         server?.stop()
         server = nil
+    }
+
+    /// 失败后重来:丢掉旧服务,换一把新密钥重新出码
+    func retry() {
+        stop()
+        state = .preparing
+        start()
     }
 
     private static func qrImage(_ text: String) -> UIImage? {

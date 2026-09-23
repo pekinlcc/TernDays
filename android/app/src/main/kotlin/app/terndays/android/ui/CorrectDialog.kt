@@ -1,7 +1,8 @@
 package app.terndays.android.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,32 +10,23 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import app.terndays.android.geo.Cities
-import app.terndays.core.CityMatcher
 import app.terndays.core.DayOverride
 import app.terndays.core.OverrideScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.time.LocalDate
 
 /**
@@ -47,27 +39,24 @@ fun CityCorrectDialog(
     currentCityName: String?,
     recentCities: List<Pair<String, String>>,
     /** 该日是否有早/晚两个半天样本:只要有半天样本就允许半天更正 */
-    hasBothHalves: Boolean = false,
+    allowHalfScope: Boolean = false,
     /** 该日已有的手动更正:重新打开时要照原样回填,不能把半天更正静默升级成整天 */
     existing: List<DayOverride> = emptyList(),
+    /** 这一天有没有打卡:没有的话「恢复自动判定」= 变成无记录,要先确认 */
+    hasPunches: Boolean = true,
     onDismiss: () -> Unit,
     onPick: (String, String, OverrideScope) -> Unit,
     onRestoreAuto: (() -> Unit)?,
 ) {
-    val context = LocalContext.current
-    var query by remember { mutableStateOf("") }
+    var confirmRestore by remember { mutableStateOf(false) }
+    // 已经有半天更正的日子(例如区间补记的首末日)一定要能选范围:否则只能继续改那半天,
+    // 既变不回整天,也补不上另一半
+    val showScopes = allowHalfScope || existing.any { it.scope != OverrideScope.FULL }
     // 已经改过半天的日子重新打开时停在那个半天上,否则一次重选就把另半天也吞掉了
     var scope by remember {
         mutableStateOf(
             existing.firstOrNull { it.scope != OverrideScope.FULL }?.scope ?: OverrideScope.FULL,
         )
-    }
-    val results by produceState(initialValue = emptyList<CityMatcher.SearchHit>(), query) {
-        value = if (query.isBlank()) {
-            emptyList()
-        } else {
-            withContext(Dispatchers.IO) { Cities.get(context).search(query, 12) }
-        }
     }
 
     Dialog(onDismissRequest = onDismiss) {
@@ -95,79 +84,53 @@ fun CityCorrectDialog(
                 }
                 Text(hint, fontSize = 12.sp, color = Td.Muted, lineHeight = 18.sp)
 
-                if (hasBothHalves) {
+                if (showScopes) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         ScopeChip("整天", scope == OverrideScope.FULL) { scope = OverrideScope.FULL }
                         ScopeChip("只改上半天", scope == OverrideScope.MORNING) { scope = OverrideScope.MORNING }
                         ScopeChip("只改下半天", scope == OverrideScope.EVENING) { scope = OverrideScope.EVENING }
                     }
                 }
-                OutlinedTextField(
-                    value = query, onValueChange = { query = it },
-                    placeholder = { Text("搜索城市名（支持拼音）", fontSize = 13.sp) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                )
-                if (query.isBlank() && recentCities.isNotEmpty()) {
-                    Text("常去城市", fontSize = 11.sp, color = Td.Faint)
-                }
-                LazyColumn(Modifier.heightIn(max = 260.dp)) {
-                    if (query.isBlank()) {
-                        items(recentCities) { (key, name) ->
-                            Text(
-                                name, fontSize = 14.sp, color = Td.Ink,
-                                modifier = Modifier.fillMaxWidth()
-                                    .clickable { onPick(key, name, scope) }
-                                    .padding(vertical = 10.dp),
-                            )
-                        }
-                    } else {
-                        items(results) { hit ->
-                            Row(
-                                Modifier.fillMaxWidth()
-                                    .clickable { onPick(hit.cityKey, hit.cityName, scope) }
-                                    .padding(vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(hit.cityName, fontSize = 14.sp, color = Td.Ink)
-                                if (hit.region.isNotEmpty()) {
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(hit.region, fontSize = 12.sp, color = Td.Faint)
-                                }
-                            }
-                        }
-                    }
+                CityPicker(recentCities) { key, name -> onPick(key, name, if (showScopes) scope else OverrideScope.FULL) }
+                if (confirmRestore && onRestoreAuto != null) {
+                    Text(
+                        "这一天没有打卡，恢复后将变为无记录。",
+                        fontSize = 12.sp, color = Td.WarmDeep, lineHeight = 18.sp,
+                    )
                 }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     if (onRestoreAuto != null) {
-                        Text(
-                            "恢复自动判定", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Td.WarmDeep,
-                            modifier = Modifier.clip(RoundedCornerShape(8.dp))
-                                .clickable(onClick = onRestoreAuto).padding(8.dp),
-                        )
+                        TdTextButton(
+                            if (confirmRestore) "确定恢复" else "恢复自动判定",
+                            color = Td.WarmDeep, fontSize = 13.sp,
+                        ) {
+                            if (hasPunches || confirmRestore) onRestoreAuto() else confirmRestore = true
+                        }
                     }
                     Spacer(Modifier.weight(1f))
-                    Text(
-                        "取消", fontSize = 13.sp, color = Td.Muted,
-                        modifier = Modifier.clickable(onClick = onDismiss).padding(8.dp),
-                    )
+                    TdTextButton("取消", color = Td.Muted, fontSize = 13.sp, onClick = onDismiss)
                 }
             }
         }
     }
 }
 
+/** 单选芯片(整天 / 半天、单日 / 区间…):读屏念「单选按钮,已选中」 */
 @Composable
-private fun ScopeChip(text: String, selected: Boolean, onClick: () -> Unit) {
-    Text(
-        text,
-        fontSize = 12.sp,
-        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-        color = if (selected) Td.OnAccent else Td.Muted,
-        modifier = Modifier
+internal fun ScopeChip(text: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.heightIn(min = 40.dp)
             .clip(RoundedCornerShape(999.dp))
-            .background(if (selected) Td.Accent else Td.Bg)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-    )
+            .background(if (selected) Td.Accent else Td.NeutralSoft)
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text,
+            fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) Td.OnAccent else Td.Muted,
+        )
+    }
 }
