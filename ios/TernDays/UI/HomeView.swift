@@ -1,8 +1,16 @@
 import SwiftUI
 import WidgetKit
 
+/// 设置页路由:从「另有 N 天可补记」进来带着首页正在看的年份,齿轮进来不带(默认今年)
+struct SettingsRoute: Hashable {
+    var year: Int?
+}
+
 struct HomeView: View {
-    @State private var year = LocalDate.today().year
+    // 只记「用户主动切到的往年」;没切过就跟着当前年走——跨过元旦回到前台自动换到新年
+    @State private var pinnedYear: Int?
+    @State private var currentYear = LocalDate.today().year
+    private var year: Int { pinnedYear ?? currentYear }
     @State private var data: YearData?
     @State private var correctingToday = false
     @ObservedObject private var punch = PunchManager.shared
@@ -60,18 +68,26 @@ struct HomeView: View {
                 NavigationLink(value: "export") { Image(systemName: "square.and.arrow.up") }
             }
             ToolbarItem(placement: .navigationBarTrailing) {
-                NavigationLink(value: "settings") { Image(systemName: "slider.horizontal.3") }
+                NavigationLink(value: SettingsRoute(year: nil)) {
+                    Image(systemName: "slider.horizontal.3").accessibilityLabel("设置")
+                }
             }
         }
         .navigationDestination(for: String.self) { route in
             if route == "export" { ExportView(initialYear: year) }
-            if route == "settings" { SettingsView() }
+        }
+        .navigationDestination(for: SettingsRoute.self) { route in
+            SettingsView(initialYear: route.year)
         }
         .navigationDestination(for: CityRoute.self) { route in
             CityDetailView(cityKey: route.cityKey, year: route.year)
         }
         .task(id: year) { reload() }
-        .onReceive(NotificationCenter.default.publisher(for: .terndaysDataChanged)) { _ in reload() }
+        .onReceive(NotificationCenter.default.publisher(for: .terndaysDataChanged)) { _ in
+            // 回到前台 / 跨天也会发这个通知:顺带确认「今年」是不是已经换了
+            let now = LocalDate.today().year
+            if now != currentYear { currentYear = now } else { reload() }
+        }
         .sheet(isPresented: $correctingToday) {
             let todayPunches = data?.punches.filter { $0.localDate == today } ?? []
             CityCorrectSheet(
@@ -81,7 +97,7 @@ struct HomeView: View {
                 hasOverride: data?.overrides.contains { $0.localDate == today } ?? false,
                 // 只要有半天样本就允许半天更正:进行中的今天只打了早点时,
                 // 整天更正会把还没到的晚点那半天一起吞掉
-                hasBothHalves: {
+                allowHalfScope: {
                     let f = DayCounting.halfSampleFlags(
                         morning: todayPunches.first { $0.slot == .morning },
                         evening: todayPunches.first { $0.slot == .evening },
@@ -120,7 +136,7 @@ struct HomeView: View {
                 HStack {
                     Menu {
                         ForEach(data?.years ?? [year], id: \.self) { y in
-                            Button("\(String(y)) 年") { year = y }
+                            Button("\(String(y)) 年") { pinnedYear = (y == LocalDate.today().year) ? nil : y }
                         }
                     } label: {
                         HStack(spacing: 4) {
@@ -141,8 +157,8 @@ struct HomeView: View {
                     bigStat(value: data.map { String($0.stats.cities.count) } ?? "–", label: "个城市")
                     Spacer()
                     if let missing = data?.stats.unrecordedDates.count, missing > 0 {
-                        // 可点:跳设置去补记(与 Android 一致)
-                        NavigationLink(value: "settings") {
+                        // 可点:带着当前年份跳设置去补记(与 Android 一致)
+                        NavigationLink(value: SettingsRoute(year: year)) {
                             Text("另有 \(missing) 天可补记")
                                 .font(.system(size: 11, weight: .medium)).foregroundColor(Td.accentDeep)
                         }
@@ -195,7 +211,7 @@ struct HomeView: View {
                         .font(.system(size: 11)).foregroundColor(Td.faint)
                 }
                 // 今天还没打完:单个样本先算 0.5 天,说明清楚免得以为少算了
-                if let shares = data?.stats.days[today]?.shares, shares.count == 1, shares[0].weight == 0.5 {
+                if let attr = data?.stats.days[today], attr.provisional, !attr.shares.isEmpty {
                     Text(evening == nil ? "今天先算半天 · 晚点打上后补满一天" : "今天先算半天 · 早点补上后补满一天")
                         .font(.system(size: 11)).foregroundColor(Td.faint)
                 }
@@ -233,7 +249,9 @@ struct HomeView: View {
                 let cities = data?.stats.cities ?? []
                 if data != nil && cities.isEmpty {
                     VStack(spacing: 6) {
-                        Text("还没有打卡记录")
+                        // 用了一年的人元旦凌晨看到「还没有打卡记录」会以为数据丢了:有往年记录时说清楚
+                        let hasEarlier = data?.stats.trackingSince.map { $0.year < year } ?? false
+                        Text(hasEarlier ? "\(String(year)) 年还没有记录" : "还没有打卡记录")
                             .font(.system(size: 15, weight: .semibold)).foregroundColor(Td.ink)
                         Text("到点后打开应用（或被系统唤醒）会自动记录所在城市")
                             .font(.system(size: 12)).foregroundColor(Td.muted)

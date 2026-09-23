@@ -14,7 +14,7 @@ struct CityCorrectSheet: View {
     let recentCities: [(String, String)]
     let hasOverride: Bool
     /// 该日是否有半天样本:有一个就允许半天更正(进行中的今天只打了早点也算)
-    var hasBothHalves: Bool = false
+    var allowHalfScope: Bool = false
     /// 该日已有的手动更正:重新打开时照原样回填,不把半天更正静默升级成整天
     var existing: [DayOverride] = []
     let onPick: (String, String, OverrideScope) -> Void
@@ -62,7 +62,7 @@ struct CityCorrectSheet: View {
                     }
                     Text(hint)
                         .font(.system(size: 13)).foregroundColor(Td.muted)
-                    if hasBothHalves {
+                    if allowHalfScope {
                         Picker("更正范围", selection: $scope) {
                             Text("整天").tag(OverrideScope.full)
                             Text("只改上半天").tag(OverrideScope.morning)

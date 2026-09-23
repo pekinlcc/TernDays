@@ -26,7 +26,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -70,18 +69,21 @@ fun HomeScreen(
     onOpenCity: (String, Int) -> Unit,
     onExport: (Int) -> Unit,
     onSettings: () -> Unit,
+    onBackfill: (Int) -> Unit,
 ) {
     val context = LocalContext.current
-    var year by rememberSaveable { mutableIntStateOf(LocalDate.now().year) }
     var tick by remember { mutableIntStateOf(0) }
     LifecycleResumeEffect(Unit) {
         tick++
         onPauseOrDispose { }
     }
-    val dataVersion = DataBus.version.intValue
-    val data by produceState<YearData?>(initialValue = null, year, tick, dataVersion) {
-        value = loadYearData(context, year)
-    }
+    // 只记「用户主动切到的往年」;没切过就跟着当前年走——跨过元旦回到前台自动换到新年,
+    // 不会停在去年(此前 rememberSaveable 存的是具体年份)
+    var pinnedYear by rememberSaveable { mutableStateOf<Int?>(null) }
+    val currentYear = remember(tick) { LocalDate.now().year }
+    val year = pinnedYear ?: currentYear
+    val load = rememberYearData(year, tick)
+    val data = load.data
     var correctingToday by remember { mutableStateOf(false) }
 
     Column(
@@ -114,7 +116,14 @@ fun HomeScreen(
             missing?.let { m ->
                 item { PermissionWarningCard(m, onSettings) }
             }
-            item { SummaryCard(year, d, onYearChange = { year = it }, onSettings) }
+            if (load.failed) item { LoadErrorCard(load.retry) }
+            item {
+                SummaryCard(
+                    year, d,
+                    onYearChange = { pinnedYear = it.takeIf { y -> y != LocalDate.now().year } },
+                    onBackfill = { onBackfill(year) },
+                )
+            }
             if (year == LocalDate.now().year) {
                 item { TodayCard(d, onCorrect = { correctingToday = true }) }
             }
@@ -151,7 +160,7 @@ fun HomeScreen(
             date = today,
             currentCityName = current?.shares?.joinToString(" + ") { it.cityName },
             recentCities = data?.stats?.cities?.map { it.cityKey to it.cityName } ?: emptyList(),
-            hasBothHalves = hasM || hasE,
+            allowHalfScope = hasM || hasE,
             existing = data?.overrides?.filter { it.localDate == today } ?: emptyList(),
             onDismiss = { correctingToday = false },
             onPick = { key, name, scope ->
@@ -236,7 +245,7 @@ internal fun IconSquare(
 }
 
 @Composable
-private fun SummaryCard(year: Int, data: YearData?, onYearChange: (Int) -> Unit, onSettings: () -> Unit) {
+private fun SummaryCard(year: Int, data: YearData?, onYearChange: (Int) -> Unit, onBackfill: () -> Unit) {
     TdCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -275,7 +284,7 @@ private fun SummaryCard(year: Int, data: YearData?, onYearChange: (Int) -> Unit,
                         "另有 $missing 天可补记",
                         fontSize = 11.sp, fontWeight = FontWeight.Medium, color = Td.AccentDeep,
                         modifier = Modifier.clip(RoundedCornerShape(8.dp))
-                            .clickable(onClick = onSettings)
+                            .clickable(onClick = onBackfill)
                             .padding(horizontal = 6.dp, vertical = 3.dp),
                     )
                 }
@@ -338,8 +347,8 @@ private fun TodayCard(data: YearData?, onCorrect: () -> Unit) {
                 )
             }
             // 今天还没打完:单个样本先算 0.5 天,说明清楚免得以为少算了
-            val pendingHalf = data?.stats?.days?.get(today)?.shares?.singleOrNull()?.takeIf { it.weight == 0.5 }
-            if (pendingHalf != null) {
+            val todayAttr = data?.stats?.days?.get(today)
+            if (todayAttr != null && todayAttr.provisional && todayAttr.shares.isNotEmpty()) {
                 Text(
                     if (evening == null) "今天先算半天 · 晚点打上后补满一天" else "今天先算半天 · 早点补上后补满一天",
                     fontSize = 11.sp, color = Td.Faint,
@@ -389,7 +398,12 @@ private fun CityListCard(data: YearData?, onOpenCity: (String) -> Unit) {
                     Modifier.fillMaxWidth().padding(vertical = 28.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Text("还没有打卡记录", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Td.Ink)
+                    // 用了一年的人元旦凌晨看到「还没有打卡记录」会以为数据丢了:有往年记录时说清楚
+                    val hasEarlier = data.stats.trackingSince?.let { it.year < data.stats.year } == true
+                    Text(
+                        if (hasEarlier) "${data.stats.year} 年还没有记录" else "还没有打卡记录",
+                        fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Td.Ink,
+                    )
                     Spacer(Modifier.height(6.dp))
                     Text(
                         "下一个 07:00 / 17:00 会自动记录你所在的城市",

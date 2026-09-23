@@ -3,6 +3,7 @@ package app.terndays.core
 import java.io.ByteArrayOutputStream
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.zip.ZipEntry
@@ -20,16 +21,18 @@ object Exporter {
     private fun punchTime(p: Punch): String =
         Instant.ofEpochMilli(p.epochMs).atZone(DayCounting.zoneOf(p.zoneId)).toLocalTime().format(TIME)
 
+    /** 「手动」只标在确实来自更正的那一份上,不贴到自动判定的另一半天 */
     private fun attributionText(attr: DayAttribution): String = when {
+        attr.shares.isEmpty() && attr.provisional -> "今天进行中（待记录）"
         attr.shares.isEmpty() -> "无记录"
         else -> attr.shares.joinToString(" / ") {
-            it.cityName + if (it.weight >= 1.0) " +1" else " +0.5"
-        } + if (attr.manual) "（手动）" else ""
+            it.cityName + (if (it.weight >= 1.0) " +1" else " +0.5") + (if (it.manual) "（手动）" else "")
+        }
     }
 
-    /** 进行中的今天只有一个半天样本时先计 0.5,导出里要说清楚,别和跨城的 0.5 混为一谈 */
+    /** 进行中的今天单样本先计 0.5,导出里要说清楚,别和跨城的 0.5 混为一谈 */
     private fun inProgressNote(attr: DayAttribution): String? =
-        if (!attr.manual && attr.shares.size == 1 && attr.shares[0].weight == 0.5) "今天进行中，先计半天" else null
+        if (attr.provisional && attr.shares.isNotEmpty()) "今天进行中，先计半天" else null
 
     data class DailyRow(
         val date: LocalDate,
@@ -48,9 +51,10 @@ object Exporter {
         }
         // 「开始使用」之前的日子不是漏记,不该在明细里写成一堆"无记录"
         // (此前与汇总里的「无记录天数」自相矛盾)
-        val since = stats.trackingSince
+        // 一条记录都还没有:没有「开始使用」之日,明细为空(导出里写一行「尚未开始记录」)
+        val since = stats.trackingSince ?: return emptyList()
         return stats.days
-            .filterKeys { since == null || !it.isBefore(since) }
+            .filterKeys { !it.isBefore(since) }
             .map { (date, attr) ->
             DailyRow(
                 date,
@@ -62,23 +66,46 @@ object Exporter {
         }
     }
 
-    private fun summaryTable(stats: YearStats): List<List<String>> {
+    private val STAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+
+    /**
+     * 城市表(城市 | 天数 | 全天数 | 半天数 | 备注)之后空一行,接一张「项目 | 数值」两列小表:
+     * 合计、无记录天数等数值都在第 2 列,不再落到「半天数」那一列下面(对列求和会被污染)。
+     * 半天数只数已定型的半天;进行中的今天先计的 0.5 写在备注里。
+     */
+    private fun summaryTable(stats: YearStats, exportedAt: LocalDateTime?): List<List<String>> {
         val rows = ArrayList<List<String>>()
-        rows.add(listOf("城市", "天数", "全天数", "半天数"))
+        rows.add(listOf("城市", "天数", "全天数", "半天数", "备注"))
         for (c in stats.cities) {
-            rows.add(listOf(c.cityName, DayCounting.formatDays(c.days), c.fullDays.toString(), c.halfDays.toString()))
+            rows.add(
+                listOf(
+                    c.cityName,
+                    DayCounting.formatDays(c.days),
+                    c.fullDays.toString(),
+                    c.halfDays.toString(),
+                    if (c.provisionalHalf > 0) "含今天进行中的半天" else "",
+                ),
+            )
         }
-        // 无记录天数不再塞进城市表的「天数」列(对该列求和会被污染),单独一段并给出合计
-        rows.add(listOf("", "", "", ""))
-        rows.add(listOf("合计（天）", DayCounting.formatDays(stats.recordedDays), "", ""))
-        rows.add(listOf("无记录天数", "", "", stats.unrecordedDates.size.toString()))
+        rows.add(listOf("", "", "", "", ""))
+        rows.add(listOf("项目", "数值"))
+        rows.add(listOf("合计（天）", DayCounting.formatDays(stats.recordedDays)))
+        rows.add(listOf("无记录天数", stats.unrecordedDates.size.toString()))
+        rows.add(listOf("统计区间", "${stats.firstDate.format(DATE)} 至 ${stats.lastDate.format(DATE)}"))
+        rows.add(listOf("开始记录日", stats.trackingSince?.format(DATE) ?: "尚未开始记录"))
+        if (exportedAt != null) rows.add(listOf("导出时间", exportedAt.format(STAMP)))
         return rows
     }
 
     private fun dailyTable(stats: YearStats, punches: List<Punch>): List<List<String>> {
         val rows = ArrayList<List<String>>()
         rows.add(listOf("日期", "星期", "早打卡", "早城市", "晚打卡", "晚城市", "首点", "计入", "备注"))
-        for (r in dailyRows(stats, punches)) {
+        val daily = dailyRows(stats, punches)
+        if (daily.isEmpty()) {
+            rows.add(listOf("尚未开始记录"))
+            return rows
+        }
+        for (r in daily) {
             val notes = ArrayList<String>()
             if (r.attribution.manual) notes.add("手动更正/补记")
             inProgressNote(r.attribution)?.let { notes.add(it) }
@@ -117,9 +144,10 @@ object Exporter {
         punches: List<Punch>,
         includeSummary: Boolean,
         includeDaily: Boolean,
+        exportedAt: LocalDateTime? = null,
     ): String {
         val parts = ArrayList<String>()
-        if (includeSummary) parts.add("# 城市汇总 · ${stats.year} 年\r\n" + csv(summaryTable(stats)))
+        if (includeSummary) parts.add("# 城市汇总 · ${stats.year} 年\r\n" + csv(summaryTable(stats, exportedAt)))
         if (includeDaily) parts.add("# 每日明细 · ${stats.year} 年\r\n" + csv(dailyTable(stats, punches)))
         return "\uFEFF" + parts.joinToString("\r\n\r\n")
     }
@@ -175,11 +203,12 @@ object Exporter {
         punches: List<Punch>,
         includeSummary: Boolean,
         includeDaily: Boolean,
+        exportedAt: LocalDateTime? = null,
     ): ByteArray {
         val sheets = ArrayList<Pair<String, List<List<String>>>>()
-        if (includeSummary) sheets.add("城市汇总" to summaryTable(stats))
+        if (includeSummary) sheets.add("城市汇总" to summaryTable(stats, exportedAt))
         if (includeDaily) sheets.add("每日明细" to dailyTable(stats, punches))
-        if (sheets.isEmpty()) sheets.add("城市汇总" to summaryTable(stats))
+        if (sheets.isEmpty()) sheets.add("城市汇总" to summaryTable(stats, exportedAt))
 
         val contentTypes = buildString {
             append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n")

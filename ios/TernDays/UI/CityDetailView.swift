@@ -8,10 +8,13 @@ struct CityDetailView: View {
     @State private var data: YearData?
     @State private var month = 0
     @State private var correcting: CorrectTarget?
+    @Environment(\.dismiss) private var dismiss
 
+    /// manual:这座城市这天的份额来自手动更正;provisional:进行中的今天,先算半天
     private struct CityDay {
         let weight: Double
         let manual: Bool
+        let provisional: Bool
     }
 
     private var cityDays: [LocalDate: CityDay] {
@@ -19,7 +22,7 @@ struct CityDetailView: View {
         var out: [LocalDate: CityDay] = [:]
         for (date, attr) in d.stats.days {
             if let share = attr.shares.first(where: { $0.cityKey == cityKey }) {
-                out[date] = CityDay(weight: share.weight, manual: attr.manual)
+                out[date] = CityDay(weight: share.weight, manual: share.manual, provisional: attr.provisional)
             }
         }
         return out
@@ -58,24 +61,17 @@ struct CityDetailView: View {
         .background(Td.bg)
         .navigationTitle(stat?.cityName ?? "")
         .navigationBarTitleDisplayMode(.inline)
-        .task {
-            let d = YearData.load(year: year)
-            data = d
-            if month == 0 {
-                let latest = d.stats.days.keys
-                    .filter { date in d.stats.days[date]?.shares.contains { $0.cityKey == cityKey } ?? false }
-                    .max()
-                month = latest?.month ?? (year == LocalDate.today().year ? LocalDate.today().month : 12)
-            }
-        }
-        .sheet(item: $correcting) { target in
+        .task { reload() }
+        // 后台打卡、别处更正、城市库重解析之后这里也要跟上(此前只在进入时读一次)
+        .onReceive(NotificationCenter.default.publisher(for: .terndaysDataChanged)) { _ in reload() }
+        .sheet(item: $correcting, onDismiss: dismissIfCityGone) { target in
             let dayPunches = (data?.punches ?? []).filter { $0.localDate == target.date }
             CityCorrectSheet(
                 date: target.date,
                 currentCityName: data?.stats.days[target.date]?.shares.map(\.cityName).joined(separator: " + "),
                 recentCities: data?.stats.cities.map { ($0.cityKey, $0.cityName) } ?? [],
                 hasOverride: data?.overrides.contains { $0.localDate == target.date } ?? false,
-                hasBothHalves: {
+                allowHalfScope: {
                     let f = DayCounting.halfSampleFlags(
                         morning: dayPunches.first { $0.slot == .morning },
                         evening: dayPunches.first { $0.slot == .evening },
@@ -98,9 +94,33 @@ struct CityDetailView: View {
 
     private func afterCorrection() {
         WidgetCenter.shared.reloadAllTimelines()
-        NotificationCenter.default.post(name: .terndaysDataChanged, object: nil)
         correcting = nil
-        data = YearData.load(year: year)
+        // 通知会触发本页与首页一起重读
+        NotificationCenter.default.post(name: .terndaysDataChanged, object: nil)
+    }
+
+    /// 后台读、主线程赋值(城市库大、年份长时读档不该卡住界面)
+    private func reload() {
+        let y = year
+        DispatchQueue.global(qos: .userInitiated).async {
+            let d = YearData.load(year: y)
+            DispatchQueue.main.async {
+                data = d
+                if month == 0 {
+                    let latest = d.stats.days.keys
+                        .filter { date in d.stats.days[date]?.shares.contains { $0.cityKey == cityKey } ?? false }
+                        .max()
+                    month = latest?.month ?? (y == LocalDate.today().year ? LocalDate.today().month : 12)
+                }
+                if correcting == nil { dismissIfCityGone() }
+            }
+        }
+    }
+
+    /// 这座城市在本年已无任何记录(如最后一天被更正走):返回列表,不停在空页(与 Android 一致)
+    private func dismissIfCityGone() {
+        guard let d = data, !d.stats.cities.contains(where: { $0.cityKey == cityKey }) else { return }
+        dismiss()
     }
 
     private func calendarCard(days: [LocalDate: CityDay]) -> some View {
@@ -223,21 +243,23 @@ struct CityDetailView: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text("\(date.month)月\(date.day)日 · \(date.weekdayCn)")
                                 .font(.system(size: 14, weight: .semibold)).foregroundColor(Td.ink)
-                                            Text(isInProgressToday(date: date, day: day, m: m, e: e)
-                                 ? subText(day: day, m: m, e: e, x: x) + " · 今天先算半天,另半天打上后补满"
-                                 : subText(day: day, m: m, e: e, x: x))
+                            Text(subText(day: day, m: m, e: e, x: x))
                                 .font(.system(size: 12)).foregroundColor(Td.muted)
                         }
                         Spacer()
-                        // 进行中的今天是"暂时算半天",与跨城日的半天不是一回事
-                        if day.manual {
-                            TagView(text: "手动", bg: Td.warmSoft, fg: Td.warmDeep)
-                        } else if isInProgressToday(date: date, day: day, m: m, e: e) {
-                            TagView(text: "进行中", bg: Td.warmSoft, fg: Td.warmDeep)
-                        } else if day.weight >= 1.0 {
-                            TagView(text: "全天", bg: Td.accentSoft, fg: Td.accentDeep)
-                        } else {
-                            TagView(text: "半天", bg: Td.accentSoft, fg: Td.accentDeep)
+                        // 主标签永远说「算了多少」:全天 / 半天 / 进行中(暂时算半天,与跨城日的半天不是一回事);
+                        // 「手动」退为次级角标,且只在这座城市的份额确实来自更正时出现
+                        VStack(alignment: .trailing, spacing: 3) {
+                            if day.provisional {
+                                TagView(text: "进行中", bg: Td.warmSoft, fg: Td.warmDeep)
+                            } else if day.weight >= 1.0 {
+                                TagView(text: "全天", bg: Td.accentSoft, fg: Td.accentDeep)
+                            } else {
+                                TagView(text: "半天", bg: Td.accentSoft, fg: Td.accentDeep)
+                            }
+                            if day.manual {
+                                Text("手动").font(.system(size: 10)).foregroundColor(Td.warmDeep)
+                            }
                         }
                     }
                     .padding(.vertical, 11)
@@ -249,16 +271,15 @@ struct CityDetailView: View {
         }
     }
 
-    private func isInProgressToday(date: LocalDate, day: CityDay, m: Punch?, e: Punch?) -> Bool {
-        !day.manual && day.weight < 1.0 && date == LocalDate.today() && [m, e].compactMap { $0 }.count < 2
-    }
-
     private func subText(day: CityDay, m: Punch?, e: Punch?, x: Punch?) -> String {
         var parts: [(Int64, String)] = []
         if let m { parts.append((m.epochMs, "早 \(m.clock) \(m.cityName)")) }
         if let e { parts.append((e.epochMs, "晚 \(e.clock) \(e.cityName)")) }
         if let x { parts.append((x.epochMs, "首 \(x.clock) \(x.cityName)")) }
         let detail = parts.sorted { $0.0 < $1.0 }.map(\.1).joined(separator: " · ")
+        if day.provisional {
+            return [detail, "今天先算半天,另半天打上后补满"].filter { !$0.isEmpty }.joined(separator: " · ")
+        }
         if day.manual { return detail.isEmpty ? "手动补记" : "已手动更正 · 当天打卡:" + detail }
         return detail.isEmpty ? "无打卡记录" : detail
     }

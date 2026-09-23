@@ -26,7 +26,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -39,7 +38,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.terndays.android.DataBus
 import app.terndays.android.R
 import app.terndays.android.db.PunchDb
 import app.terndays.android.widget.TernDaysWidgetProvider
@@ -50,17 +48,15 @@ import app.terndays.core.Slot
 import java.time.LocalDate
 import java.time.YearMonth
 
-private data class CityDay(val weight: Double, val manual: Boolean)
+/** manual:这座城市这天的份额来自手动更正;provisional:进行中的今天,先算半天 */
+private data class CityDay(val weight: Double, val manual: Boolean, val provisional: Boolean)
 
 @Composable
 fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
     val context = LocalContext.current
     var tick by remember { mutableIntStateOf(0) }
-    val dataVersion = DataBus.version.intValue
-    val data by produceState<YearData?>(initialValue = null, cityKey, year, tick, dataVersion) {
-        value = loadYearData(context, year)
-    }
-    val d = data
+    val load = rememberYearData(year, cityKey, tick)
+    val d = load.data
     var correcting by remember { mutableStateOf<LocalDate?>(null) }
 
     // 该城市在本年已无任何记录(如最后一天被更正走):自动返回列表,不停留在空页
@@ -70,7 +66,8 @@ fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
 
     val cityDays: Map<LocalDate, CityDay> = remember(d) {
         d?.stats?.days?.mapNotNull { (date, attr) ->
-            attr.shares.firstOrNull { it.cityKey == cityKey }?.let { date to CityDay(it.weight, attr.manual) }
+            attr.shares.firstOrNull { it.cityKey == cityKey }
+                ?.let { date to CityDay(it.weight, it.manual, attr.provisional) }
         }?.toMap() ?: emptyMap()
     }
     val stat = d?.stats?.cities?.firstOrNull { it.cityKey == cityKey }
@@ -99,6 +96,7 @@ fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
         Spacer(Modifier.height(12.dp))
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxSize()) {
+            if (load.failed) item { LoadErrorCard(load.retry) }
             item {
                 Row(Modifier.padding(horizontal = 2.dp), verticalAlignment = Alignment.Bottom) {
                     Text(
@@ -146,7 +144,7 @@ fun CityDetailScreen(cityKey: String, year: Int, onBack: () -> Unit) {
             date = target,
             currentCityName = current?.shares?.joinToString(" + ") { it.cityName },
             recentCities = d?.stats?.cities?.map { it.cityKey to it.cityName } ?: emptyList(),
-            hasBothHalves = DayCounting.halfSampleFlags(
+            allowHalfScope = DayCounting.halfSampleFlags(
                 dayPunches.firstOrNull { it.slot == Slot.MORNING },
                 dayPunches.firstOrNull { it.slot == Slot.EVENING },
                 dayPunches.firstOrNull { it.slot == Slot.EXTRA },
@@ -343,8 +341,8 @@ private fun DetailListCard(
                             x?.let { it.epochMs to "首 ${punchClock(it)} ${it.cityName}" },
                         ).sortedBy { it.first }.joinToString(" · ") { it.second }
                         val sub = when {
-                            !day.manual && day.weight < 1.0 && date == LocalDate.now() && listOfNotNull(m, e).size < 2 ->
-                                "$detail · 今天先算半天,另半天打上后补满"
+                            day.provisional -> listOf(detail, "今天先算半天,另半天打上后补满")
+                                .filter { it.isNotEmpty() }.joinToString(" · ")
                             day.manual && detail.isEmpty() -> "手动补记"
                             day.manual -> "已手动更正 · 当天打卡:$detail"
                             detail.isEmpty() -> "无打卡记录"
@@ -352,20 +350,23 @@ private fun DetailListCard(
                         }
                         Text(sub, fontSize = 12.sp, color = Td.Muted)
                     }
-                    // 进行中的今天是"暂时算半天",与跨城日的半天不是一回事,标签要区分
-                    val inProgressToday = !day.manual && day.weight < 1.0 && date == LocalDate.now() &&
-                        listOfNotNull(m, e).size < 2
+                    // 主标签永远说「算了多少」:全天 / 半天 / 进行中(暂时算半天,与跨城日的半天不是一回事);
+                    // 「手动」退为次级角标,且只在这座城市的份额确实来自更正时出现
                     val (label, bg, fg) = when {
-                        day.manual -> Triple("手动", Td.WarmSoft, Td.WarmDeep)
-                        inProgressToday -> Triple("进行中", Td.WarmSoft, Td.WarmDeep)
+                        day.provisional -> Triple("进行中", Td.WarmSoft, Td.WarmDeep)
                         day.weight >= 1.0 -> Triple("全天", Td.AccentSoft, Td.AccentDeep)
                         else -> Triple("半天", Td.AccentSoft, Td.AccentDeep)
                     }
-                    Text(
-                        label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = fg,
-                        modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(bg)
-                            .padding(horizontal = 9.dp, vertical = 3.dp),
-                    )
+                    Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text(
+                            label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = fg,
+                            modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(bg)
+                                .padding(horizontal = 9.dp, vertical = 3.dp),
+                        )
+                        if (day.manual) {
+                            Text("手动", fontSize = 10.sp, color = Td.WarmDeep)
+                        }
+                    }
                 }
             }
         }

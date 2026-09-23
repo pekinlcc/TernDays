@@ -114,8 +114,8 @@ STYLES = {
         note='底面:白 / #1C1C1E 实心;唯一品牌色在年份上。'),
     'widget_style_material.xml': dict(
         name='系统材质(Android 近似)', bg='widget_bg_material',
-        year='widgetAccent', primary='widgetPrimary', secondary='widgetSecondary',
-        note='底面:高不透明度中性色——小组件是静态快照,做不出实时模糊,这里是近似。'),
+        year='widgetAccent', primary='widgetPrimary', secondary='widgetMaterialSecondary',
+        note='底面:高不透明度中性色——小组件是静态快照,做不出实时模糊,这里是近似;次级文字加深以压住任意壁纸。'),
     'widget_style_gradient.xml': dict(
         name='品牌渐变', bg='widget_bg_gradient',
         year='widgetOnBrandYear', primary='widgetOnBrand', secondary='widgetOnBrandFaint',

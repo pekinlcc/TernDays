@@ -12,4 +12,6 @@
     <string name="widget_preview_city_3">杭州</string>
     <string name="widget_preview_days_3">21</string>
     <string name="widget_empty">还没有打卡记录</string>
+    <!-- 元旦后当年还没有记录(往年有):别让人以为数据丢了 -->
+    <string name="widget_empty_new_year">%1$d 年的第一条记录会在下次打卡后出现</string>
 </resources>

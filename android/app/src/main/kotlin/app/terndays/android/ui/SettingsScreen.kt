@@ -29,6 +29,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -69,7 +72,7 @@ import kotlinx.coroutines.withContext
 import java.time.LocalDate
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
+fun SettingsScreen(initialYear: Int? = null, onBack: () -> Unit, onMigrate: () -> Unit) {
     val context = LocalContext.current
     var tick by remember { mutableIntStateOf(0) }
     LifecycleResumeEffect(Unit) {
@@ -78,11 +81,10 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
     }
 
     // 年份可切换:此前写死当前年,往年的无记录日在应用里根本补不了
-    var year by remember { mutableIntStateOf(LocalDate.now().year) }
-    val dataVersion = DataBus.version.intValue
-    val data by produceState<YearData?>(initialValue = null, tick, dataVersion, year) {
-        value = loadYearData(context, year)
-    }
+    // 从首页「另有 N 天可补记」进来时带着首页正在看的年份;齿轮进来默认今年
+    var year by rememberSaveable { mutableIntStateOf(initialYear ?: LocalDate.now().year) }
+    val load = rememberYearData(year, tick)
+    val data = load.data
 
     val finePermLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -121,6 +123,7 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
         Spacer(Modifier.height(12.dp))
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxSize()) {
+            if (load.failed) item { LoadErrorCard(load.retry) }
             item {
                 Text(
                     "打卡保障 · 每一项都会影响后台自动打卡的成功率",
@@ -268,8 +271,9 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
                         // 往年也能补记:切到那一年即可
                         val years = data?.years ?: listOf(year)
                         if (years.size > 1) {
+                            // 年份多了要能横向滚动,不然早期年份点不到
                             Row(
-                                Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 10.dp),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
                                 years.forEach { y ->
@@ -452,6 +456,7 @@ fun SettingsScreen(onBack: () -> Unit, onMigrate: () -> Unit) {
 
     if (backfillOpen) {
         BackfillDialog(
+            year = year,
             unrecorded = data?.stats?.unrecordedDates ?: emptyList(),
             recentCities = data?.stats?.cities?.map { it.cityKey to it.cityName } ?: emptyList(),
             onDismiss = { backfillOpen = false },
@@ -521,6 +526,7 @@ private fun AboutLine(label: String, value: String, onClick: (() -> Unit)? = nul
 
 @Composable
 private fun BackfillDialog(
+    year: Int,
     unrecorded: List<LocalDate>,
     recentCities: List<Pair<String, String>>,
     onDismiss: () -> Unit,
@@ -544,7 +550,7 @@ private fun BackfillDialog(
                 if (date == null) {
                     Text("选择要补记的日期", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Td.Ink)
                     if (unrecorded.isEmpty()) {
-                        Text("今年没有缺记录的日子 🎉", fontSize = 13.sp, color = Td.Muted)
+                        Text("${year} 年没有缺记录的日子", fontSize = 13.sp, color = Td.Muted)
                     }
                     LazyColumn(Modifier.heightIn(max = 320.dp)) {
                         items(unrecorded.sortedDescending()) { d ->

@@ -6,6 +6,7 @@
     <color name="widgetSecondary">#98989D</color>
     <color name="widgetAccent">#7CC0E8</color>
     <color name="widgetMaterialBase">#E6262A2F</color>
+    <color name="widgetMaterialSecondary">#AEAEB2</color>
     <color name="widgetGradTop">#1F5C7F</color>
     <color name="widgetGradBottom">#0F3247</color>
 </resources>

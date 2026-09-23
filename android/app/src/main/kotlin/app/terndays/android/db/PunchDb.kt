@@ -198,7 +198,8 @@ class PunchDb private constructor(context: Context) :
             out
         }
         if (items.isEmpty()) return 0
-        val overrides = allOverrides().filter { it.scope == OverrideScope.FULL }.associate { it.localDate to it.cityKey }
+        val existingOverrides = allOverrides()
+        val overrides = existingOverrides.filter { it.scope == OverrideScope.FULL }.associate { it.localDate to it.cityKey }
         val outcomes = HistoryReplay.replay(matcher, items, overrides)
 
         val db = writableDatabase
@@ -215,6 +216,18 @@ class PunchDb private constructor(context: Context) :
                 }
                 db.update("punch", values, "id=?", arrayOf(o.id.toString()))
                 if (o.changed) changed++
+            }
+            // 手动更正里存的城市名也跟着城市库走:否则改名后同一 cityKey 在打卡日与更正日显示两个名字
+            for (ov in existingOverrides) {
+                val name = matcher.nameOf(ov.cityKey) ?: continue
+                if (name == ov.cityName) continue
+                db.update(
+                    "day_override",
+                    ContentValues().apply { put("city_name", name) },
+                    "local_date=? AND scope=?",
+                    arrayOf(ov.localDate.toString(), ov.scope.name),
+                )
+                changed++
             }
             db.setTransactionSuccessful()
         } finally {

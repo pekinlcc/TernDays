@@ -47,7 +47,7 @@ fun CityCorrectDialog(
     currentCityName: String?,
     recentCities: List<Pair<String, String>>,
     /** 该日是否有早/晚两个半天样本:只要有半天样本就允许半天更正 */
-    hasBothHalves: Boolean = false,
+    allowHalfScope: Boolean = false,
     /** 该日已有的手动更正:重新打开时要照原样回填,不能把半天更正静默升级成整天 */
     existing: List<DayOverride> = emptyList(),
     onDismiss: () -> Unit,
@@ -95,7 +95,7 @@ fun CityCorrectDialog(
                 }
                 Text(hint, fontSize = 12.sp, color = Td.Muted, lineHeight = 18.sp)
 
-                if (hasBothHalves) {
+                if (allowHalfScope) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         ScopeChip("整天", scope == OverrideScope.FULL) { scope = OverrideScope.FULL }
                         ScopeChip("只改上半天", scope == OverrideScope.MORNING) { scope = OverrideScope.MORNING }

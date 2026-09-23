@@ -114,11 +114,12 @@ struct ExportView: View {
         }
     }
 
-    /// 明细预览:最近 3 天,让用户导出前先看一眼内容(对齐 Android)
+    /// 明细预览:最近 3 天,让用户导出前先看一眼内容(与 Android 同一口径:
+    /// 只有首点或纯手动补记的日子也要能预览,早点列缺失时回落到「首 城市」)
     @ViewBuilder
     private var previewCard: some View {
         let rows = data.map { Exporter.dailyRows(stats: $0.stats, punches: $0.punches) }?
-            .filter { $0.morning != nil || $0.evening != nil }
+            .filter { $0.morning != nil || $0.evening != nil || $0.extra != nil || !$0.attribution.shares.isEmpty }
             .suffix(3) ?? []
         if !rows.isEmpty {
             TdCard {
@@ -128,7 +129,7 @@ struct ExportView: View {
                     ForEach(Array(rows), id: \.date) { r in
                         previewRow([
                             String(format: "%02d-%02d", r.date.month, r.date.day),
-                            r.morning?.cityName ?? "–",
+                            r.morning?.cityName ?? r.extra.map { "首 \($0.cityName)" } ?? "–",
                             r.evening?.cityName ?? "–",
                             r.attribution.shares
                                 .map { $0.cityName + ($0.weight >= 1.0 ? " +1" : " +0.5") }
@@ -207,12 +208,14 @@ struct ExportView: View {
                 if useXlsx {
                     url = dir.appendingPathComponent("TernDays-\(year).xlsx")
                     let bytes = Exporter.exportXlsx(stats: d.stats, punches: d.punches,
-                                                    includeSummary: incSummary, includeDaily: incDaily)
+                                                    includeSummary: incSummary, includeDaily: incDaily,
+                                                    exportedAt: Date())
                     try bytes.write(to: url)
                 } else {
                     url = dir.appendingPathComponent("TernDays-\(year).csv")
                     let text = Exporter.exportCsv(stats: d.stats, punches: d.punches,
-                                                  includeSummary: incSummary, includeDaily: incDaily)
+                                                  includeSummary: incSummary, includeDaily: incDaily,
+                                                  exportedAt: Date())
                     guard let data = text.data(using: .utf8) else {
                         throw NSError(domain: "TernDays", code: -1,
                                       userInfo: [NSLocalizedDescriptionKey: "内容编码失败"])

@@ -21,18 +21,7 @@ class BootReceiver : BroadcastReceiver() {
             -> {
                 PunchScheduler.scheduleNext(context)
                 PunchService.maybeBackfill(context)
-                // 广播接收器返回即可能被杀:用 goAsync 保住小组件刷新线程
-                val pending = goAsync()
-                Thread {
-                    try {
-                        runCatching {
-                            TernDaysWidgetProvider.pushAllSync(context)
-                            TernDaysWidgetProvider.scheduleMidnightRefresh(context)
-                        }
-                    } finally {
-                        pending.finish()
-                    }
-                }.start()
+                refreshWidgets(context)
             }
             Intent.ACTION_TIMEZONE_CHANGED,
             Intent.ACTION_TIME_CHANGED,
@@ -41,10 +30,27 @@ class BootReceiver : BroadcastReceiver() {
                 // 向东飞落地后当天那个时段的闹钟可能已经"过去"了:重排之后立刻补打一次,
                 // 否则整个时段就这么丢了(此前只重排不补打)
                 PunchService.maybeBackfill(context)
+                // 「今天」「今年」可能都变了:小组件立刻按新时区重算,零点刷新也要按新时区重排
+                refreshWidgets(context)
             }
             ACTION_EXACT_ALARM_PERMISSION_CHANGED,
             -> PunchScheduler.scheduleNext(context)
         }
+    }
+
+    /** 广播接收器返回即可能被杀:用 goAsync 保住小组件刷新线程 */
+    private fun refreshWidgets(context: Context) {
+        val pending = goAsync()
+        Thread {
+            try {
+                runCatching {
+                    TernDaysWidgetProvider.pushAllSync(context)
+                    TernDaysWidgetProvider.scheduleMidnightRefresh(context)
+                }
+            } finally {
+                pending.finish()
+            }
+        }.start()
     }
 
     companion object {

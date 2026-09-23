@@ -12,12 +12,13 @@ private enum WColor {
     static let accent = Color(uiColor: UIColor { trait in
         trait.userInterfaceStyle == .dark ? UIColor(rgb: 0x7CC0E8) : UIColor(rgb: 0x1F6289)
     })
-    /// 品牌渐变的两个色标(深浅各一组)
+    /// 品牌渐变的两个色标(深浅各一组,与 Android colors.xml 一致)。
+    /// 浅色顶部由 #2E7FA8 压深到 #1F6289:白字此前只有约 4.45:1
     static let gradTop = Color(uiColor: UIColor { trait in
-        trait.userInterfaceStyle == .dark ? UIColor(rgb: 0x1F5C7F) : UIColor(rgb: 0x2E7FA8)
+        trait.userInterfaceStyle == .dark ? UIColor(rgb: 0x1F5C7F) : UIColor(rgb: 0x1F6289)
     })
     static let gradBottom = Color(uiColor: UIColor { trait in
-        trait.userInterfaceStyle == .dark ? UIColor(rgb: 0x0F3247) : UIColor(rgb: 0x1B5578)
+        trait.userInterfaceStyle == .dark ? UIColor(rgb: 0x0F3247) : UIColor(rgb: 0x154766)
     })
 }
 
@@ -35,8 +36,9 @@ private struct WidgetPalette {
         case .gradient:
             return WidgetPalette(
                 primary: .white,
-                secondary: .white.opacity(0.72),
-                year: .white.opacity(0.85),
+                // 年份 90% ≥5.7:1、次级 80% ≥4.9:1(两个色标上都成立)
+                secondary: .white.opacity(0.8),
+                year: .white.opacity(0.9),
                 accentable: false
             )
         }
@@ -66,11 +68,14 @@ struct TernEntry: TimelineEntry {
     let top: [TopCity]
     /// 数据暂时读不到(重启后首次解锁前):显示「解锁后显示」,而不是误导性的「还没有打卡记录」
     var unavailable = false
+    /// 今年还空着、但往年有记录(典型:元旦凌晨):别让人以为数据丢了
+    var newYearEmpty = false
+    var year = LocalDate.today().year
 }
 
 /// 只展示最关键的信息:今年 Top 3 城市及天数(三行等权重)。
-/// 刷新是打卡驱动的:应用每次打卡 / 补记会主动 reload;
-/// 时间线只在下一个打卡时间点之后兜底刷一次(每天至多两次),不做高频轮询。
+/// 刷新是打卡驱动的:应用每次打卡 / 补记 / 切换外观 / 时区变化会主动 reload;
+/// 时间线另排一条零点条目(半天补满、元旦换年),并在下一个打卡时间点之后兜底刷一次,不做高频轮询。
 struct TernProvider: TimelineProvider {
     func placeholder(in context: Context) -> TernEntry {
         TernEntry(
@@ -134,7 +139,9 @@ struct TernProvider: TimelineProvider {
             yearLabel: "\(String(day.year)) 年",
             top: stats.cities.prefix(3).enumerated().map { i, c in
                 TopCity(id: i, name: c.cityName, days: DayCounting.formatDays(c.days))
-            }
+            },
+            newYearEmpty: stats.cities.isEmpty && (stats.trackingSince.map { $0.year < day.year } ?? false),
+            year: day.year
         )
     }
 }
@@ -143,7 +150,7 @@ private extension View {
     /// iOS 17+ 交给系统合成底面(自动拿到系统内容边距、StandBy / 锁屏自动去底);
     /// iOS 16 没有 containerBackground,手动补 16pt 边距与底色。
     ///
-    /// 三种外观:素面 = 实心语义底;系统材质 = 真正的 .regularMaterial(壁纸由系统实时模糊,
+    /// 三种外观:素面 = 实心语义底;系统材质 = .regularMaterial(半透明底、跟随深浅模式,
     /// iOS 16 回落素面);品牌渐变 = 竖向两色标。
     @ViewBuilder
     func widgetBackgroundCompat(_ style: WidgetStyle) -> some View {
@@ -195,7 +202,9 @@ struct TernDaysWidgetView: View {
                 .lineLimit(1)
 
             if entry.top.isEmpty {
-                Text(entry.unavailable ? "解锁手机后显示" : "还没有打卡记录")
+                Text(entry.unavailable ? "解锁手机后显示"
+                     : entry.newYearEmpty ? "\(String(entry.year)) 年的第一条记录会在下次打卡后出现"
+                     : "还没有打卡记录")
                     .font(.system(size: 13))
                     .foregroundStyle(palette.secondary)
                     .padding(.top, 8)

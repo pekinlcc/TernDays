@@ -23,6 +23,17 @@ final class CityMatcher {
 
     var size: Int { lats.count }
 
+    /// cityKey → 当前城市库里的显示名(每城取第一个点位的名字)
+    private lazy var nameByKey: [String: String] = {
+        var m: [String: String] = [:]
+        m.reserveCapacity(keys.count)
+        for i in keys.indices where m[keys[i]] == nil { m[keys[i]] = names[i] }
+        return m
+    }()
+
+    /// 当前城市库里这个 cityKey 的显示名;库里没有返回 nil。
+    func nameOf(_ cityKey: String) -> String? { nameByKey[cityKey] }
+
     init(tsv: String) {
         var lats: [Double] = []
         var lngs: [Double] = []

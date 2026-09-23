@@ -156,16 +156,21 @@ struct DayOverride: Codable {
     }
 }
 
+/// manual:这份权重是否来自手动更正(整天更正,或构成它的某个半天样本是半天更正)
 struct CityShare: Equatable {
     let cityKey: String
     let cityName: String
     let weight: Double
+    var manual: Bool = false
 }
 
+/// 与 Android :core DayAttribution 同义。
+/// provisional = 进行中的今天:缺的那半天还没到点,结果还会变(单样本先计 0.5,或还一条都没有)
 struct DayAttribution {
     let date: LocalDate
     let shares: [CityShare]
     var manual: Bool = false
+    var provisional: Bool = false
 }
 
 struct CityStat: Identifiable {
@@ -174,7 +179,10 @@ struct CityStat: Identifiable {
     let cityName: String
     let days: Double
     let fullDays: Int
+    /// 已定型的半天数(不含进行中的今天)
     let halfDays: Int
+    /// 进行中的今天先计的那 0.5 天(0 或 1)
+    var provisionalHalf: Int = 0
 }
 
 struct YearStats {

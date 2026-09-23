@@ -3,7 +3,7 @@
   本文件由 tools/gen_widget_layouts.py 生成,请勿手改(CI 会检查)。
   2×2 小组件 · 系统材质(Android 近似)
   年份眉题 + Top 3 城市三行等权重(城市名 15 / 天数 19 / 单位 11);行间与末尾的弹性间距平分余量。
-  底面:高不透明度中性色——小组件是静态快照,做不出实时模糊,这里是近似。
+  底面:高不透明度中性色——小组件是静态快照,做不出实时模糊,这里是近似;次级文字加深以压住任意壁纸。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root"
@@ -31,7 +31,7 @@
         android:includeFontPadding="false"
         android:text="@string/widget_empty"
         android:textSize="13sp"
-        android:textColor="@color/widgetSecondary"
+        android:textColor="@color/widgetMaterialSecondary"
         android:visibility="gone" />
 
     <FrameLayout
@@ -77,7 +77,7 @@
             android:includeFontPadding="false"
             android:text="@string/widget_unit_day"
             android:textSize="11sp"
-            android:textColor="@color/widgetSecondary" />
+            android:textColor="@color/widgetMaterialSecondary" />
     </LinearLayout>
 
     <FrameLayout
@@ -125,7 +125,7 @@
             android:includeFontPadding="false"
             android:text="@string/widget_unit_day"
             android:textSize="11sp"
-            android:textColor="@color/widgetSecondary" />
+            android:textColor="@color/widgetMaterialSecondary" />
     </LinearLayout>
 
     <FrameLayout
@@ -173,7 +173,7 @@
             android:includeFontPadding="false"
             android:text="@string/widget_unit_day"
             android:textSize="11sp"
-            android:textColor="@color/widgetSecondary" />
+            android:textColor="@color/widgetMaterialSecondary" />
     </LinearLayout>
 
     <FrameLayout

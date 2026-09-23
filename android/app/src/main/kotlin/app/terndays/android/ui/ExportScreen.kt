@@ -31,7 +31,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -67,9 +66,11 @@ fun ExportScreen(initialYear: Int, onBack: () -> Unit) {
     // 不能用 rememberSaveable:旋转屏幕会把「正在生成」状态复活,按钮永久卡死
     var busy by remember { mutableStateOf(false) }
 
-    val data by produceState<YearData?>(initialValue = null, year) {
-        value = loadYearData(context, year)
-    }
+    // 与首页同一读取入口:打卡 / 更正后(DataBus)预览与导出内容自动跟上
+    val load = rememberYearData(year)
+    val data = load.data
+    // 没选任何内容、数据还没读到时按钮置灰,文案说清原因
+    val canExport = !busy && data != null && (incSummary || incDaily)
 
     Column(Modifier.fillMaxSize().background(Td.Bg).statusBarsPadding().padding(horizontal = 20.dp)) {
         Spacer(Modifier.height(10.dp))
@@ -84,6 +85,7 @@ fun ExportScreen(initialYear: Int, onBack: () -> Unit) {
         Spacer(Modifier.height(12.dp))
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.weight(1f)) {
+            if (load.failed) item { LoadErrorCard(load.retry) }
             item { SectionLabel("导出范围") }
             item {
                 // 年份多了要能横向滚动,不然早期年份点不到
@@ -163,12 +165,14 @@ fun ExportScreen(initialYear: Int, onBack: () -> Unit) {
         Column(Modifier.padding(vertical = 10.dp).navigationBarsPadding()) {
             Box(
                 Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(14.dp))
-                    .background(if (busy) Td.Faint else Td.Accent)
-                    .clickable(enabled = !busy && (incSummary || incDaily)) {
+                    .background(if (canExport) Td.Accent else Td.Faint)
+                    .clickable(enabled = canExport) {
+                        val snapshot = data ?: return@clickable
                         busy = true
                         scope.launch {
                             try {
-                                shareExport(context, year, useXlsx, incSummary, incDaily)
+                                // 导出的就是页面上预览的这一份,不再另读一次
+                                shareExport(context, snapshot, useXlsx, incSummary, incDaily)
                             } catch (e: Exception) {
                                 Toast.makeText(context, "导出失败：${e.message}", Toast.LENGTH_LONG).show()
                             } finally {
@@ -182,7 +186,12 @@ fun ExportScreen(initialYear: Int, onBack: () -> Unit) {
                     Icon(painterResource(R.drawable.ic_share), null, Modifier.size(18.dp), tint = Td.OnAccent)
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        if (busy) "正在生成…" else "生成文件并分享",
+                        when {
+                            busy -> "正在生成…"
+                            !incSummary && !incDaily -> "请至少选择一项导出内容"
+                            data == null -> "正在读取…"
+                            else -> "生成文件并分享"
+                        },
                         fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Td.OnAccent,
                     )
                 }
@@ -273,21 +282,22 @@ private fun PreviewRow(cells: List<String>, header: Boolean = false) {
 
 private suspend fun shareExport(
     context: Context,
-    year: Int,
+    data: YearData,
     useXlsx: Boolean,
     incSummary: Boolean,
     incDaily: Boolean,
 ) {
+    val year = data.stats.year
     val uri = withContext(Dispatchers.IO) {
-        val data = loadYearData(context, year)
+        val now = java.time.LocalDateTime.now()
         val dir = File(context.cacheDir, "exports").apply { mkdirs() }
         val file: File
         if (useXlsx) {
             file = File(dir, "TernDays-$year.xlsx")
-            file.writeBytes(Exporter.exportXlsx(data.stats, data.punches, incSummary, incDaily))
+            file.writeBytes(Exporter.exportXlsx(data.stats, data.punches, incSummary, incDaily, now))
         } else {
             file = File(dir, "TernDays-$year.csv")
-            file.writeText(Exporter.exportCsv(data.stats, data.punches, incSummary, incDaily))
+            file.writeText(Exporter.exportCsv(data.stats, data.punches, incSummary, incDaily, now))
         }
         FileProvider.getUriForFile(context, context.packageName + ".files", file)
     }

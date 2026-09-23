@@ -18,6 +18,7 @@ import app.terndays.android.Prefs
 import app.terndays.android.geo.Cities
 import app.terndays.android.punch.PunchScheduler
 import app.terndays.android.punch.PunchService
+import app.terndays.android.widget.TernDaysWidgetProvider
 
 class MainActivity : ComponentActivity() {
 
@@ -35,6 +36,8 @@ class MainActivity : ComponentActivity() {
         if (Prefs.onboardingDone(this)) {
             PunchScheduler.scheduleNext(this)
             PunchService.maybeBackfill(this, fromForeground = true)
+            // 改了系统字号 / 时区后回到应用,小组件按新条件重排(行数阈值随字号变)
+            TernDaysWidgetProvider.updateAll(this)
             Cities.reResolveHistoryIfNeeded(this) { changed ->
                 runOnUiThread {
                     Toast.makeText(this, "城市库已更新，自动修正了 $changed 条历史记录", Toast.LENGTH_LONG).show()
@@ -70,6 +73,7 @@ private fun AppRoot() {
                 onOpenCity = { key, year -> nav.navigate("city/${Uri.encode(key)}/$year") },
                 onExport = { year -> nav.navigate("export/$year") },
                 onSettings = { nav.navigate("settings") },
+                onBackfill = { year -> nav.navigate("settings?year=$year") },
             )
         }
         composable(
@@ -95,8 +99,12 @@ private fun AppRoot() {
                 onBack = { nav.popBackStack() },
             )
         }
-        composable("settings") {
+        composable(
+            "settings?year={year}",
+            arguments = listOf(navArgument("year") { type = NavType.IntType; defaultValue = -1 }),
+        ) { entry ->
             SettingsScreen(
+                initialYear = entry.arguments?.getInt("year")?.takeIf { it > 0 },
                 onBack = { nav.popBackStack() },
                 onMigrate = { nav.navigate("migrate") },
             )

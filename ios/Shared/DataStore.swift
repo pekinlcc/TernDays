@@ -253,6 +253,21 @@ final class DataStore {
         }
     }
 
+    /// 城市库升级后按 cityKey 刷新手动更正里的城市名。@return 改了几条
+    func refreshOverrideNames(_ lookup: (String) -> String?) -> Int {
+        queue.sync {
+            var changed = 0
+            for i in overrides.indices {
+                let o = overrides[i]
+                guard let name = lookup(o.cityKey), name != o.cityName else { continue }
+                overrides[i] = DayOverride(localDate: o.localDate, cityKey: o.cityKey, cityName: name, scope: o.scope)
+                changed += 1
+            }
+            if changed > 0 { persist() }
+            return changed
+        }
+    }
+
     func punchesForYear(_ year: Int) -> [Punch] {
         queue.sync { punches.filter { $0.localDate.year == year }.sorted { $0.epochMs < $1.epochMs } }
     }

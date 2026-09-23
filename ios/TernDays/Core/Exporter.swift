@@ -19,8 +19,9 @@ enum Exporter {
             bySlot[k] = p
         }
         // 「开始使用」之前的日子不是漏记,不写进明细(与汇总里的无记录天数保持一致)
-        let since = stats.trackingSince
-        return stats.days.keys.sorted().filter { since == nil || $0 >= since! }.map { date in
+        // 一条记录都还没有:明细为空(导出里写一行「尚未开始记录」)
+        guard let since = stats.trackingSince else { return [] }
+        return stats.days.keys.sorted().filter { $0 >= since }.map { date in
             DailyRow(
                 date: date,
                 morning: bySlot["\(date)|\(Slot.morning.rawValue)"],
@@ -31,31 +32,53 @@ enum Exporter {
         }
     }
 
+    /// 「手动」只标在确实来自更正的那一份上(与 Android :core Exporter 逐字一致)
     private static func attributionText(_ attr: DayAttribution) -> String {
-        if attr.shares.isEmpty { return "无记录" }
-        let body = attr.shares.map { $0.cityName + ($0.weight >= 1.0 ? " +1" : " +0.5") }.joined(separator: " / ")
-        return body + (attr.manual ? "（手动）" : "")
+        if attr.shares.isEmpty { return attr.provisional ? "今天进行中（待记录）" : "无记录" }
+        return attr.shares.map {
+            $0.cityName + ($0.weight >= 1.0 ? " +1" : " +0.5") + ($0.manual ? "（手动）" : "")
+        }.joined(separator: " / ")
     }
 
-    private static func summaryTable(_ stats: YearStats) -> [[String]] {
-        var rows: [[String]] = [["城市", "天数", "全天数", "半天数"]]
+    private static let stampFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        return f
+    }()
+
+    /// 城市表(城市 | 天数 | 全天数 | 半天数 | 备注)之后空一行,接「项目 | 数值」两列小表;
+    /// 半天数只数已定型的半天,进行中的今天写在备注里。
+    private static func summaryTable(_ stats: YearStats, exportedAt: Date?) -> [[String]] {
+        var rows: [[String]] = [["城市", "天数", "全天数", "半天数", "备注"]]
         for c in stats.cities {
-            rows.append([c.cityName, DayCounting.formatDays(c.days), String(c.fullDays), String(c.halfDays)])
+            rows.append([
+                c.cityName, DayCounting.formatDays(c.days), String(c.fullDays), String(c.halfDays),
+                c.provisionalHalf > 0 ? "含今天进行中的半天" : "",
+            ])
         }
-        // 无记录天数不再塞进城市表的「天数」列,单独一段并给出合计
-        rows.append(["", "", "", ""])
-        rows.append(["合计（天）", DayCounting.formatDays(stats.recordedDays), "", ""])
-        rows.append(["无记录天数", "", "", String(stats.unrecordedDates.count)])
+        rows.append(["", "", "", "", ""])
+        rows.append(["项目", "数值"])
+        rows.append(["合计（天）", DayCounting.formatDays(stats.recordedDays)])
+        rows.append(["无记录天数", String(stats.unrecordedDates.count)])
+        rows.append(["统计区间", "\(stats.firstDate) 至 \(stats.lastDate)"])
+        rows.append(["开始记录日", stats.trackingSince?.description ?? "尚未开始记录"])
+        if let exportedAt { rows.append(["导出时间", stampFormatter.string(from: exportedAt)]) }
         return rows
     }
 
     private static func dailyTable(_ stats: YearStats, _ punches: [Punch]) -> [[String]] {
         var rows: [[String]] = [["日期", "星期", "早打卡", "早城市", "晚打卡", "晚城市", "首点", "计入", "备注"]]
-        for r in dailyRows(stats: stats, punches: punches) {
+        let daily = dailyRows(stats: stats, punches: punches)
+        if daily.isEmpty {
+            rows.append(["尚未开始记录"])
+            return rows
+        }
+        for r in daily {
             var notes: [String] = []
             if r.attribution.manual { notes.append("手动更正/补记") }
             // 进行中的今天先计 0.5,别和跨城的 0.5 混为一谈
-            if !r.attribution.manual, r.attribution.shares.count == 1, r.attribution.shares[0].weight == 0.5 {
+            if r.attribution.provisional && !r.attribution.shares.isEmpty {
                 notes.append("今天进行中，先计半天")
             }
             if r.morning?.delayed == true { notes.append("早点延迟") }
@@ -91,9 +114,10 @@ enum Exporter {
         rows.map { $0.map(csvEscape).joined(separator: ",") }.joined(separator: "\r\n")
     }
 
-    static func exportCsv(stats: YearStats, punches: [Punch], includeSummary: Bool, includeDaily: Bool) -> String {
+    static func exportCsv(stats: YearStats, punches: [Punch], includeSummary: Bool, includeDaily: Bool,
+                          exportedAt: Date? = nil) -> String {
         var parts: [String] = []
-        if includeSummary { parts.append("# 城市汇总 · \(stats.year) 年\r\n" + csv(summaryTable(stats))) }
+        if includeSummary { parts.append("# 城市汇总 · \(stats.year) 年\r\n" + csv(summaryTable(stats, exportedAt: exportedAt))) }
         if includeDaily { parts.append("# 每日明细 · \(stats.year) 年\r\n" + csv(dailyTable(stats, punches))) }
         return "\u{FEFF}" + parts.joined(separator: "\r\n\r\n")
     }
@@ -141,11 +165,12 @@ enum Exporter {
         return sb
     }
 
-    static func exportXlsx(stats: YearStats, punches: [Punch], includeSummary: Bool, includeDaily: Bool) -> Data {
+    static func exportXlsx(stats: YearStats, punches: [Punch], includeSummary: Bool, includeDaily: Bool,
+                           exportedAt: Date? = nil) -> Data {
         var sheets: [(String, [[String]])] = []
-        if includeSummary { sheets.append(("城市汇总", summaryTable(stats))) }
+        if includeSummary { sheets.append(("城市汇总", summaryTable(stats, exportedAt: exportedAt))) }
         if includeDaily { sheets.append(("每日明细", dailyTable(stats, punches))) }
-        if sheets.isEmpty { sheets.append(("城市汇总", summaryTable(stats))) }
+        if sheets.isEmpty { sheets.append(("城市汇总", summaryTable(stats, exportedAt: exportedAt))) }
 
         var contentTypes = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
         contentTypes += "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"

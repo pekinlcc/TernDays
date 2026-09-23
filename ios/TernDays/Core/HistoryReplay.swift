@@ -38,6 +38,7 @@ enum HistoryReplay {
                 anchorEpochMs = p.epochMs
             }
         }
-        return store.applyResolveOutcomes(outcomes)
+        // 手动更正里存的城市名也跟着城市库走(与 Android PunchDb.replayResolveAll 同口径)
+        return store.applyResolveOutcomes(outcomes) + store.refreshOverrideNames { matcher.nameOf($0) }
     }
 }

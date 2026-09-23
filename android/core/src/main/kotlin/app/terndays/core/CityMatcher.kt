@@ -25,6 +25,13 @@ class CityMatcher private constructor(
 
     val size: Int get() = lats.size
 
+    private val nameByKey: Map<String, String> by lazy {
+        HashMap<String, String>(keys.size).also { m -> for (i in keys.indices) m.putIfAbsent(keys[i], names[i]) }
+    }
+
+    /** 当前城市库里这个 cityKey 的显示名;库里没有(城市被合并/删除)返回 null。 */
+    fun nameOf(cityKey: String): String? = nameByKey[cityKey]
+
     fun nearest(lat: Double, lng: Double): Match? {
         if (lats.isEmpty()) return null
         var best = -1

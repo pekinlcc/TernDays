@@ -14,8 +14,13 @@ struct SettingsView: View {
     @State private var importResult: String?
     @State private var importResultTitle = ""
 
-    /// 年份可切换:此前写死当前年,往年的无记录日在应用里根本补不了
-    @State private var year: Int = LocalDate.today().year
+    /// 年份可切换:此前写死当前年,往年的无记录日在应用里根本补不了。
+    /// 从首页「另有 N 天可补记」进来时带着首页正在看的年份
+    @State private var year: Int
+
+    init(initialYear: Int? = nil) {
+        _year = State(initialValue: initialYear ?? LocalDate.today().year)
+    }
     /// 小组件外观(与扩展共享 App Group 偏好)
     @State private var widgetStyle: WidgetStyle = WidgetStyle.current
 
@@ -264,6 +269,7 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $backfillOpen) {
             BackfillSheet(
+                year: year,
                 unrecorded: data?.stats.unrecordedDates.sorted(by: >) ?? [],
                 recentCities: data?.stats.cities.map { ($0.cityKey, $0.cityName) } ?? []
             ) { date, key, name in
@@ -332,6 +338,7 @@ struct SettingsView: View {
 }
 
 struct BackfillSheet: View {
+    let year: Int
     let unrecorded: [LocalDate]
     let recentCities: [(String, String)]
     let onConfirm: (LocalDate, String, String) -> Void
@@ -370,7 +377,7 @@ struct BackfillSheet: View {
                 } else {
                     Section("选择要补记的日期") {
                         if unrecorded.isEmpty {
-                            Text("今年没有缺记录的日子").foregroundColor(Td.muted)
+                            Text("\(String(year)) 年没有缺记录的日子").foregroundColor(Td.muted)
                         }
                         ForEach(unrecorded, id: \.self) { d in
                             Button("\(d.month)月\(d.day)日 · \(d.weekdayCn)") { pickedDate = d }

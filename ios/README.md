@@ -40,5 +40,5 @@ TernDays/
   UI/             首页 / 城市日历详情 / 导出 / 设置(补记) / 引导
   cities.tsv      离线城市库（tools/build_city_dataset.py 生成）
 TernDaysWidget/   桌面小组件（systemSmall（2×2）：今年 Top 3 城市及天数），
-                  打卡/补记后即时刷新，其余只在下一个打卡时间点后兜底刷新（每天至多两次）
+                  打卡/补记/切换外观/时区变化后即时刷新；时间线另排零点条目，并在下一个打卡时间点后兜底刷新
 ```

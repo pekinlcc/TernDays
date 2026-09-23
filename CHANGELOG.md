@@ -3,6 +3,22 @@
 版本号规则：起始 0.1；小功能改进 → 0.2、0.3…；bug 修复 → 0.1.1、0.1.2…；
 重大功能 / 架构或设计重构 → 1.0.0、2.0.0…。每个版本对应一个 `vX.Y[.Z]` tag 与 GitHub Release。
 
+## v0.11.4 · 2026-09-23
+
+第二次全面复查的最后一批(计天 / 导出口径 + 年份切换 + 小组件):
+
+- :core `DayAttribution.provisional`、`CityShare.manual`、`CityStat.provisionalHalf`;显示名取最近一天、排序 cityKey 兜底;
+  iOS 同步(按日期有序遍历)。首页 / 城市详情 / 导出统一读这些字段;「手动」改为次级角标
+- 城市库重放时刷新手动更正里的城市名(`CityMatcher.nameOf`,双端)
+- 导出汇总:城市表 + 「项目 | 数值」两列小表(统计区间、开始记录日、导出时间);since==null 明细只写一行;
+  今天未打写「今天进行中(待记录)」;Android 导出页随 DataBus 刷新、导出即预览数据、按钮置灰说明
+- 年份:首页 pinnedYear(元旦自动换年)、`settings?year=`、iOS `SettingsRoute`;年份芯片横滚;空态带年份
+- Android `rememberYearData` 三态 + `LoadErrorCard`(四个页面)
+- 小组件:`runAsync`、零点 `setWindow`、时区变化刷新、`WidgetSummary.maxRows`(只缩放文字)、
+  渐变 #1F6289 / 90% / 80%、材质次级色、元旦空态、API ≤30 previewImage;iOS 同步配色与空态
+- `hasBothHalves` 更名 `allowHalfScope`;文档与注释对齐(B7)
+- :core 测试 82 → 88
+
 ## v0.11.3 · 2026-09-23
 
 第二次全面复查的第三批(隐私备份口径 + 迁移健壮性):

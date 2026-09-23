@@ -108,7 +108,7 @@ class FirstPunchTest {
             punch("2026-09-01", Slot.EXTRA, "上海", 16),
             DayOverride(d, "CN:成都", "成都"),
         )
-        assertEquals(listOf(CityShare("CN:成都", "成都", 1.0)), a.shares)
+        assertEquals(listOf(CityShare("CN:成都", "成都", 1.0, manual = true)), a.shares)
     }
 
     @Test
