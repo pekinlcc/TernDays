@@ -25,10 +25,37 @@ object DayCounting {
     fun zoneOf(id: String): java.time.ZoneId =
         runCatching { java.time.ZoneId.of(id) }.getOrElse { java.time.ZoneId.systemDefault() }
 
-    /** 半天样本:来自打卡、首点兜底,或半天手动更正。 */
-    private data class Sample(val cityKey: String, val cityName: String, val manual: Boolean = false)
+    /** 有效半天样本；punch 保留原始定位与时刻，手动更正只替换用于显示/统计的城市。 */
+    data class HalfSample(
+        val cityKey: String,
+        val cityName: String,
+        val manual: Boolean = false,
+        val punch: Punch? = null,
+    )
 
-    private fun Punch.sample() = Sample(cityKey, cityName)
+    /**
+     * 今日卡片与计天共用同一份有效城市：整天更正 > 半天更正 > 正式打卡 > 首点兜底。
+     * 调用方传入同一天的打卡和更正；撤销/恢复自动后重新传入即可还原原始城市。
+     */
+    fun halfSamples(
+        morning: Punch?,
+        evening: Punch?,
+        extra: Punch?,
+        overrides: List<DayOverride>,
+    ): Pair<HalfSample?, HalfSample?> {
+        val full = overrides.firstOrNull { it.scope == OverrideScope.FULL }
+        fun sample(punch: Punch?, scope: OverrideScope): HalfSample? {
+            val correction = full ?: overrides.firstOrNull { it.scope == scope }
+            return when {
+                correction != null -> HalfSample(correction.cityKey, correction.cityName, manual = true, punch = punch)
+                punch != null -> HalfSample(punch.cityKey, punch.cityName, punch = punch)
+                else -> null
+            }
+        }
+        val m = morning ?: extra?.takeIf { PunchRules.isMorningHalf(localTime(it)) }
+        val e = evening ?: extra?.takeIf { !PunchRules.isMorningHalf(localTime(it)) }
+        return sample(m, OverrideScope.MORNING) to sample(e, OverrideScope.EVENING)
+    }
 
     /**
      * 这一天上/下半天各自有没有样本（含首点兜底）。
@@ -65,19 +92,14 @@ object DayCounting {
         if (full != null) {
             return DayAttribution(date, listOf(CityShare(full.cityKey, full.cityName, 1.0, manual = true)), manual = true)
         }
-        val mo = overrides.firstOrNull { it.scope == OverrideScope.MORNING }
-        val eo = overrides.firstOrNull { it.scope == OverrideScope.EVENING }
-        val m = mo?.let { Sample(it.cityKey, it.cityName, manual = true) }
-            ?: (morning ?: extra?.takeIf { PunchRules.isMorningHalf(localTime(it)) })?.sample()
-        val e = eo?.let { Sample(it.cityKey, it.cityName, manual = true) }
-            ?: (evening ?: extra?.takeIf { !PunchRules.isMorningHalf(localTime(it)) })?.sample()
-        return attributeSamples(date, m, e, manual = mo != null || eo != null, pending = pending)
+        val (m, e) = halfSamples(morning, evening, extra, overrides)
+        return attributeSamples(date, m, e, manual = m?.manual == true || e?.manual == true, pending = pending)
     }
 
     private fun attributeSamples(
         date: LocalDate,
-        morning: Sample?,
-        evening: Sample?,
+        morning: HalfSample?,
+        evening: HalfSample?,
         manual: Boolean,
         pending: Set<Slot>,
     ): DayAttribution {

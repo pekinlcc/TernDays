@@ -469,10 +469,14 @@ private fun BigStat(value: String, label: String) {
 private fun TodayCard(data: YearData?, attempt: Prefs.Attempt?, paused: Boolean, onCorrect: () -> Unit) {
     val today = LocalDate.now()
     val punches = data?.punches?.filter { it.localDate == today } ?: emptyList()
-    val morning = punches.firstOrNull { it.slot == Slot.MORNING }
-    val evening = punches.firstOrNull { it.slot == Slot.EVENING }
     val extra = punches.firstOrNull { it.slot == Slot.EXTRA }
-    val hasToday = punches.isNotEmpty() || data?.stats?.days?.containsKey(today) == true
+    val (morning, evening) = DayCounting.halfSamples(
+        punches.firstOrNull { it.slot == Slot.MORNING },
+        punches.firstOrNull { it.slot == Slot.EVENING },
+        extra,
+        data?.overrides?.filter { it.localDate == today } ?: emptyList(),
+    )
+    val hasToday = morning != null || evening != null
 
     TdCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 13.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -503,7 +507,7 @@ private fun TodayCard(data: YearData?, attempt: Prefs.Attempt?, paused: Boolean,
             }
             if (extra != null) {
                 Text(
-                    "首点 ${Fmt.clock(extra)} · ${extra.cityName} ✓（已记录当前位置）",
+                    "原始首点 ${Fmt.clock(extra)} · ${extra.cityName}",
                     fontSize = 11.sp, color = Td.Faint,
                 )
             }
@@ -520,7 +524,7 @@ private fun TodayCard(data: YearData?, attempt: Prefs.Attempt?, paused: Boolean,
     }
 }
 
-/** 「最近一次尝试 07:02 · 早点 · 已记录 深圳 ｜ 下一次 17:00」:打卡链路是否在工作,一眼可见 */
+/** 定位尝试保留原始结果，与上方手动更正后的有效城市区分。 */
 @Composable
 private fun AttemptLine(attempt: Prefs.Attempt?, paused: Boolean) {
     val zone = ZoneId.systemDefault()
@@ -541,11 +545,11 @@ private fun AttemptLine(attempt: Prefs.Attempt?, paused: Boolean) {
             else -> ""
         }
         val result = when (a.result) {
-            "ok" -> "已记录 ${a.detail}"
+            "ok" -> "原始定位 ${a.detail}"
             "no_fix" -> a.detail + (a.retryAtMs?.let { " · ${hm(it)} 再试一次" } ?: "")
             else -> a.detail
         }
-        "最近一次尝试 $dayPrefix${hm(a.atMs)}$slot · $result"
+        "最近定位尝试 $dayPrefix${hm(a.atMs)}$slot · $result"
     }
     val next = if (paused) {
         "自动打卡已暂停"
@@ -564,33 +568,43 @@ private fun PunchCell(
     iconRes: Int,
     iconTint: Color,
     label: String,
-    punch: Punch?,
+    sample: DayCounting.HalfSample?,
     stillPossible: Boolean,
     modifier: Modifier,
 ) {
-    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-        Icon(painterResource(iconRes), null, Modifier.size(20.dp), tint = iconTint)
-        Spacer(Modifier.width(10.dp))
-        Column {
-            Text(label, fontSize = 11.sp, color = Td.Faint)
-            if (punch != null) {
+    Column(modifier) {
+        Text(label, fontSize = 11.sp, color = Td.Faint, modifier = Modifier.padding(start = 30.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(painterResource(iconRes), null, Modifier.size(20.dp), tint = iconTint)
+            Spacer(Modifier.width(10.dp))
+            if (sample != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(punch.cityName, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.Ink)
+                    Text(sample.cityName, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Td.Ink)
                     Spacer(Modifier.width(5.dp))
                     Icon(painterResource(R.drawable.ic_check), null, Modifier.size(14.dp), tint = Td.Accent)
                 }
-                // 实际时刻 + 延迟 / 缓存位置标记:被系统推迟或用了旧位置时一眼可见
-                val marks = listOfNotNull(
-                    Fmt.clock(punch),
-                    "延迟".takeIf { punch.delayed },
-                    "缓存位置".takeIf { punch.fromCache },
-                )
-                Text(marks.joinToString(" · "), fontSize = 10.sp, color = Td.Faint)
             } else {
                 Text(
                     if (stillPossible) "待记录" else "未记录",
                     fontSize = 14.sp, color = Td.Faint,
                 )
+            }
+        }
+        if (sample != null) {
+            Column(Modifier.padding(start = 30.dp)) {
+                if (sample.manual) {
+                    Text("手动更正", fontSize = 10.sp, color = Td.AccentDeep)
+                }
+                // 这里仍是原始打卡的时刻和来源，没有定位点时不伪造时间。
+                sample.punch?.let { punch ->
+                    val marks = listOfNotNull(
+                        Fmt.clock(punch),
+                        "首点".takeIf { punch.slot == Slot.EXTRA },
+                        "延迟".takeIf { punch.delayed },
+                        "缓存位置".takeIf { punch.fromCache },
+                    )
+                    Text(marks.joinToString(" · "), fontSize = 10.sp, color = Td.Faint)
+                }
             }
         }
     }
