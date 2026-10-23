@@ -82,7 +82,7 @@ internal fun BackfillDialog(
         value = if (end.isBefore(from)) {
             emptyMap()
         } else {
-            runCatching { loadRangeData(context, from, end).stats.days }.getOrDefault(emptyMap())
+            loadCatching { loadRangeData(context, from, end).stats.days }.getOrDefault(emptyMap())
         }
     }
 

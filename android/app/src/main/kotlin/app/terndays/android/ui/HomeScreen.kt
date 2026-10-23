@@ -115,7 +115,7 @@ fun HomeScreen(
     // 12 月底的漏记在 1 月初也看不见(与 iOS 同为最近 400 天)
     val recent by produceState<YearData?>(null, tick, dataVersion) {
         val t = LocalDate.now()
-        value = runCatching { loadRangeData(context, t.minusDays(400), t) }.getOrNull()
+        value = loadCatching { loadRangeData(context, t.minusDays(400), t) }.getOrNull()
     }
 
     Column(

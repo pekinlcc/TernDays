@@ -27,6 +27,7 @@ import app.terndays.core.DayCounting
 import app.terndays.core.DayOverride
 import app.terndays.core.Punch
 import app.terndays.core.YearStats
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
@@ -55,6 +56,20 @@ suspend fun loadYearData(context: Context, year: Int): YearData = withContext(Di
 }
 
 /**
+ * 读库,把异常收成 Result——但**不吞协程取消**。
+ * produceState 的 key(DataBus 版本、重试…)一变,上一轮读取就被取消。此前直接用 runCatching 包挂起调用,
+ * 被取消的那一轮会把 CancellationException 当成「读取失败」写进同一个 state:打开应用时补打落库会连着
+ * bump 几次,首页就闪「读取失败」;旧的一轮若比新的一轮晚收尾,还会一直停在失败卡片上直到点重试。
+ */
+suspend fun <T> loadCatching(block: suspend () -> T): Result<T> = try {
+    Result.success(block())
+} catch (e: CancellationException) {
+    throw e
+} catch (e: Throwable) {
+    Result.failure(e)
+}
+
+/**
  * 一年数据的读取状态。data == null && !failed 是加载中。
  * 读库异常(存储损坏、磁盘满…)此前会直接抛到协程里把应用带崩;现在变成可重试的错误态。
  */
@@ -67,7 +82,7 @@ fun rememberYearData(year: Int, vararg keys: Any?): YearDataState {
     var attempt by remember { mutableIntStateOf(0) }
     val dataVersion = DataBus.version.intValue
     val result by produceState<Result<YearData>?>(null, year, dataVersion, attempt, *keys) {
-        value = runCatching { loadYearData(context, year) }
+        value = loadCatching { loadYearData(context, year) }
     }
     return YearDataState(
         data = result?.getOrNull(),
@@ -115,7 +130,7 @@ fun rememberRangeData(range: Pair<LocalDate, LocalDate>?): YearDataState {
     val result by produceState<Result<YearData>?>(null, range, dataVersion, attempt) {
         value = null
         val r = range ?: return@produceState
-        value = runCatching { loadRangeData(context, r.first, r.second) }
+        value = loadCatching { loadRangeData(context, r.first, r.second) }
     }
     return YearDataState(result?.getOrNull(), result?.isFailure == true, retry = { attempt++ })
 }

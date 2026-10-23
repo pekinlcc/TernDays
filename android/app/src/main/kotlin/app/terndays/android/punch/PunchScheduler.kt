@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import app.terndays.android.Prefs
+import app.terndays.android.util.Intents
 import app.terndays.core.PunchRules
 import app.terndays.core.Slot
 import java.time.LocalDate
@@ -43,14 +44,7 @@ object PunchScheduler {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        val am = context.getSystemService(AlarmManager::class.java)
-        val at = next.toInstant().toEpochMilli()
-        if (canExact(context)) {
-            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
-        } else {
-            // 没有精确闹钟权限时降级为非精确（设置页会提示用户开启）
-            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
-        }
+        setWakeAlarm(context, next.toInstant().toEpochMilli(), pi)
     }
 
     /**
@@ -61,16 +55,28 @@ object PunchScheduler {
     fun scheduleRetry(context: Context, decisionDate: LocalDate, slot: Slot, isRetry: Boolean): Long? {
         val zone = ZoneId.systemDefault()
         val at = PunchRules.retryAt(decisionDate, slot, LocalDateTime.now(zone), isRetry) ?: return null
-        val am = context.getSystemService(AlarmManager::class.java)
         val ms = at.atZone(zone).toInstant().toEpochMilli()
         return runCatching {
-            if (canExact(context)) {
-                am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, ms, retryIntent(context, slot))
-            } else {
-                am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, ms, retryIntent(context, slot))
-            }
+            setWakeAlarm(context, ms, retryIntent(context, slot))
             ms
         }.getOrNull()
+    }
+
+    /**
+     * 打卡与重试一律用「闹钟时钟」(setAlarmClock)排,不用 setExactAndAllowWhileIdle。
+     * 部分国产 ROM 会在应用退到后台约 1 分钟后冻结进程,并把它的普通精确闹钟一并挂起,直到用户
+     * 再打开应用——电池优化白名单、自启动全开也照样挂(实测 nubia MyOS 16 的 FEAT_POWER_NF:
+     * 日志 "powerSaver restricted",闹钟被推到一年后;同一时刻排的闹钟时钟不受限,到点照常唤醒)。
+     * 代价是状态栏出现闹钟图标、「下一个闹钟」可能显示 07:00 / 17:00;点它打开应用首页。
+     */
+    private fun setWakeAlarm(context: Context, atMs: Long, pi: PendingIntent) {
+        val am = context.getSystemService(AlarmManager::class.java)
+        if (canExact(context)) {
+            am.setAlarmClock(AlarmManager.AlarmClockInfo(atMs, Intents.openApp(context)), pi)
+        } else {
+            // 没有精确闹钟权限时降级为非精确（设置页会提示用户开启）
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMs, pi)
+        }
     }
 
     /** 暂停自动打卡:撤掉定时打卡与重试两类闹钟。 */
